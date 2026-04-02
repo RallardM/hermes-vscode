@@ -610,10 +610,13 @@ function send(): void {
   skillsBtn.textContent = '✦';
   if (!isBusy) {
     // Un-sticky the previous user message
-    messagesEl.querySelector('.msg.user.sticky')?.classList.remove('sticky', 'expanded');
+    messagesEl.querySelector('.msg.user.sticky')?.classList.remove('sticky');
     const userEl = appendMessage('user', text);
     userEl.classList.add('sticky');
-    userEl.addEventListener('click', () => userEl.classList.toggle('expanded'));
+    userEl.addEventListener('click', () => {
+      userEl.classList.remove('sticky');
+      userEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
     currentAgentEl = null; currentAgentText = ''; thinkingStatusEl = null; pendingText = '';
     showWaiting();
   } else {

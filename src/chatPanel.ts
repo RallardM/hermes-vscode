@@ -838,18 +838,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     /* Sticky last prompt — pinned at top while scrolling response */
     .msg.user.sticky {
       position: sticky; top: 0; z-index: 10;
-      max-height: 3.2em; overflow: hidden;
+      max-height: 4.5em; overflow: hidden;
       background: var(--vscode-sideBar-background);
       border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
       cursor: pointer;
-      mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
-      -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+      mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+      opacity: 0.85;
     }
     .msg.user.sticky::before { display: none; }
-    .msg.user.sticky.expanded {
-      max-height: none;
-      mask-image: none; -webkit-mask-image: none;
-    }
     .msg.user .context-annotation {
       font-family: var(--ui-font);
       font-size: 0.72em;
