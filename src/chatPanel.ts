@@ -1141,10 +1141,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     #model-btn:hover { color: var(--gold); border-color: var(--gold-border); }
     #model-menu {
-      position: absolute; bottom: calc(100% + 4px); left: 0;
+      position: absolute; top: 100%; left: 0; right: 0;
       background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
       border: 1px solid var(--vscode-dropdown-border, var(--vscode-sideBarSectionHeader-border));
-      border-radius: 4px; min-width: 180px; z-index: 100; overflow: hidden;
+      border-top: none; border-radius: 0 0 4px 4px;
+      min-width: 180px; z-index: 200; overflow: hidden;
+      max-height: 350px; overflow-y: auto;
     }
     .model-option {
       padding: 5px 10px; font-size: 0.85em; font-family: var(--ui-font);
@@ -1234,6 +1236,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       </div>
     </div>
     <div id="session-picker" class="status-dropdown" style="display:none"></div>
+    <div id="model-menu" style="display:none">
+      ${this.buildModelMenuItems()}
+    </div>
   </div>
   <div id="todo-overlay"></div>
   <div id="messages">
@@ -1279,9 +1284,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="model-switcher" style="display:none">
       <button id="model-btn" title="Switch model">${this.initialModel} ▾</button>
-      <div id="model-menu" style="display:none">
-        ${this.buildModelMenuItems()}
-      </div>
     </div>
     <div id="skills-menu" style="display:none"></div>
   </div>
