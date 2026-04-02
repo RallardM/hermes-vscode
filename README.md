@@ -8,7 +8,7 @@ Hermes is an AI coding agent that runs directly in your VS Code sidebar. It stre
 - **Sidebar chat panel** — Hermes lives in the VS Code activity bar with a custom winged sandal icon
 - **Streaming markdown** — responses render live with debounced markdown formatting and DOMPurify sanitization
 - **Thinking display** — extended reasoning shown as gold italic status line
-- **Inline images** — Hermes `MEDIA:/path` protocol renders images directly in chat
+- **Inline images** — cached Hermes media renders directly in chat without exposing arbitrary local paths
 - **Copy buttons** — hover any code block to copy its contents
 
 ### Tools & Skills
@@ -65,8 +65,8 @@ Hermes is an AI coding agent that runs directly in your VS Code sidebar. It stre
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `hermes.path` | `hermes` | Path to the `hermes` binary (auto-resolves `~/.local/bin/hermes`) |
-| `hermes.debugLogs` | `true` | Show ACP protocol logs in the Hermes Output channel |
+| `hermes.path` | `hermes` | Trusted machine-level path to the `hermes` binary (auto-resolves common install paths) |
+| `hermes.debugLogs` | `false` | Enable diagnostic ACP logs in the Hermes Output channel |
 
 ## Keyboard Shortcuts
 
@@ -108,7 +108,7 @@ Webview (Browser sandbox)
 └── webview/main.ts   — streaming renderer, markdown, session/model/skills UI
 ```
 
-The extension spawns `hermes acp` as a subprocess and communicates via **JSON-RPC 2.0 over stdio**. File edits and reads auto-open in VS Code. The webview is sandboxed with CSP and DOMPurify for all agent content.
+The extension spawns `hermes acp` as a subprocess and communicates via **JSON-RPC 2.0 over stdio**. File edits and reads auto-open in VS Code. The webview is sandboxed with CSP and DOMPurify for agent content, cached media is isolated to extension storage, and permission requests are confirmed in VS Code before approval.
 
 ## License
 

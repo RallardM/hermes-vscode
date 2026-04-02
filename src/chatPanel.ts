@@ -98,6 +98,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** Track tool call locations by ID for file-open on completion. */
   private toolCallLocations = new Map<string, { kind: string; paths: string[] }>();
+  private readonly mediaRoot: string;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -107,6 +108,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     private readonly context: vscode.ExtensionContext,
     private readonly log: (line: string) => void = () => {},
   ) {
+    this.mediaRoot = path.join(this.context.globalStorageUri.fsPath, 'media');
+    fs.mkdirSync(this.mediaRoot, { recursive: true });
+
     // Load persisted sessions
     const saved = context.workspaceState.get<ChatSession[]>(SESSIONS_KEY);
     if (saved && saved.length > 0) {
@@ -123,8 +127,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [
         vscode.Uri.joinPath(this.extensionUri, 'dist'),
         vscode.Uri.joinPath(this.extensionUri, 'resources'),
-        vscode.Uri.file('/tmp'),
-        vscode.Uri.file(os.homedir()),
+        vscode.Uri.file(this.mediaRoot),
       ],
     };
 
@@ -286,7 +289,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private async handleFromWebview(msg: FromWebview): Promise<void> {
     if (msg.type === 'send' && msg.text) {
-      this.log(`[ui] send ${msg.text.slice(0, 120)}`);
+      this.log(`[ui] send (${msg.text.length} chars)`);
       // Store user message in history (skip slash commands)
       if (!msg.text.startsWith('/')) {
         const s = this.activeSession();
@@ -396,11 +399,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
     } else if (msg.type === 'pasteImage' && msg.data && msg.ext) {
-      // Save pasted image from clipboard to temp file and attach it
-      const tmpPath = path.join(os.tmpdir(), `hermes-paste-${Date.now()}.${msg.ext}`);
+      // Save pasted image to the extension's media cache so the webview never exposes arbitrary local paths.
+      const tmpPath = path.join(this.mediaRoot, `hermes-paste-${Date.now()}.${msg.ext}`);
       try {
         fs.writeFileSync(tmpPath, Buffer.from(msg.data, 'base64'));
-        this.log(`[ui] pasted image saved to ${tmpPath}`);
+        this.log('[ui] pasted image cached');
         this.setAttachedFile(tmpPath);
       } catch (err) {
         this.log(`[ui] failed to save pasted image: ${err}`);
@@ -411,7 +414,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       for (const uri of msg.uris) {
         try {
           const fsPath = vscode.Uri.parse(uri).fsPath;
-          this.log(`[ui] dropped file ${fsPath}`);
+          this.log(`[ui] dropped file ${path.basename(fsPath)}`);
           this.setAttachedFile(fsPath);
         } catch (err) {
           this.log(`[ui] failed to parse dropped URI: ${err}`);
@@ -469,7 +472,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async runPrompt(text: string): Promise<void> {
-    this.log(`[ui] run prompt ${text.slice(0, 120)}`);
+    this.log(`[ui] run prompt (${text.length} chars)`);
     this.busy = true;
     this.post({ type: 'busy', active: true, queued: this.messageQueue.length });
     const cwd = this.resolveWorkingDirectory();
@@ -575,7 +578,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           preview: !isEdit,     // edits open as persistent tabs, reads as preview
           viewColumn: vscode.ViewColumn.One,
         });
-        this.log(`[ui] opened ${isEdit ? 'edited' : 'read'} file: ${filePath}`);
+        this.log(`[ui] opened ${isEdit ? 'edited' : 'read'} file ${path.basename(filePath)}`);
       }, err => {
         this.log(`[ui] failed to open file: ${err}`);
       });
@@ -587,9 +590,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** Convert MEDIA:/absolute/path references to webview-safe <img> tags. */
   private convertMediaPaths(text: string, webview: vscode.Webview): string {
     return text.replace(/MEDIA:(\/[^\s\n]+)/g, (_match, filePath: string) => {
+      if (!this.isAllowedMediaPath(filePath)) {
+        return `[blocked image: ${path.basename(filePath)}]`;
+      }
       const uri = webview.asWebviewUri(vscode.Uri.file(filePath));
       return `![image](${uri})`;
     });
+  }
+
+  private isAllowedMediaPath(filePath: string): boolean {
+    const normalizedFile = path.resolve(filePath);
+    const normalizedRoot = path.resolve(this.mediaRoot) + path.sep;
+    const allowedExt = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+    return normalizedFile.startsWith(normalizedRoot) && allowedExt.has(path.extname(normalizedFile).toLowerCase());
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   private newSessionEntry(title: string): string {
@@ -616,12 +638,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return this.modelGroups.map(group => {
       const items = group.items.map(m => {
         const active = (m.id === this.initialModel || m.command === this.initialModel) ? ' active' : '';
-        const suffix = m.command === m.id ? '' : `<span style="opacity:0.45;font-size:0.82em"> ${m.command}</span>`;
-        return `<div class="model-option${active}" data-command="${m.command}">${m.label}${suffix}</div>`;
+        const suffix = m.command === m.id
+          ? ''
+          : `<span style="opacity:0.45;font-size:0.82em"> ${this.escapeHtml(m.command)}</span>`;
+        return `<div class="model-option${active}" data-command="${this.escapeHtml(m.command)}">${this.escapeHtml(m.label)}${suffix}</div>`;
       }).join('');
-      return `<div class="model-group-label">${group.group}</div>${items}`;
+      return `<div class="model-group-label">${this.escapeHtml(group.group)}</div>${items}`;
     }).join('<div class="model-sep"></div>') +
-    extra.map(m => `<div class="model-option active" data-command="${m.command}">${m.label}</div>`).join('');
+    extra.map(m => `<div class="model-option active" data-command="${this.escapeHtml(m.command)}">${this.escapeHtml(m.label)}</div>`).join('');
   }
 
   private buildHtml(webview: vscode.Webview): string {
@@ -653,9 +677,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     :root {
       --ui-font: 'Segoe UI', system-ui, -apple-system, sans-serif;
-      --gold: rgba(245, 197, 66, 1);
+      --gold: #F5C542;
       --gold-dim: rgba(245, 197, 66, 0.65);
-      --gold-border: rgba(245, 197, 66, 0.35);
+      --gold-subtle: rgba(245, 197, 66, 0.12);
+      --gold-border: rgba(245, 197, 66, 0.25);
+      --toolbar-height: 28px;
     }
 
     body {
@@ -669,53 +695,58 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
     }
 
-    /* ── Status bar (top — session name + tokens only) ── */
-    #status-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 5px 8px;
+    /* ── Header (two rows) ────────────────────────────── */
+    #header {
       border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
       background: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.08));
       font-family: var(--ui-font);
-      font-size: 0.95em;
-      color: var(--vscode-descriptionForeground);
-      min-height: 28px;
-      gap: 8px;
       flex-shrink: 0;
       position: relative;
     }
 
-    /* Session — clickable, fills left side */
-    #status-session {
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      cursor: pointer;
-      background: none;
-      border: none;
-      color: var(--gold);
-      font: inherit;
-      font-size: 1em;
-      font-weight: 600;
-      padding: 0;
-      text-align: left;
-      min-width: 0;
+    /* Row 1: brand + model */
+    #header-brand {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px 2px;
+      font-size: 0.85em;
     }
-    #status-session:hover { opacity: 0.8; }
+    #header-brand .brand-icon { font-size: 1.4em; color: var(--gold); }
+    #header-brand .brand-text { font-weight: 700; color: var(--gold); letter-spacing: 0.04em; }
+    #header-brand .brand-sep { opacity: 0.3; }
+    #header-brand .brand-version { opacity: 0.4; font-size: 0.85em; }
+    #model-btn-header {
+      background: none; border: none; cursor: pointer;
+      color: var(--vscode-descriptionForeground);
+      font: inherit; font-size: 1em; padding: 0;
+    }
+    #model-btn-header:hover { color: var(--gold); }
+
+    /* Row 2: session + tokens */
+    #header-session {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 2px 8px 5px; gap: 8px;
+    }
+    #status-session {
+      flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      cursor: pointer; background: none; border: none;
+      color: var(--vscode-foreground); font: inherit;
+      font-family: var(--ui-font); font-size: 0.82em;
+      padding: 0; text-align: left; min-width: 0;
+    }
+    #status-session:hover { color: var(--gold); }
+    *:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder, var(--gold));
+      outline-offset: 1px;
+    }
 
     #status-right {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-shrink: 0;
-      font-size: 1em;
+      display: flex; align-items: center; gap: 5px;
+      flex-shrink: 0; font-size: 0.82em;
+      font-family: var(--ui-font);
+      color: var(--vscode-descriptionForeground);
     }
     #status-context {
-      white-space: nowrap;
-      font-variant-numeric: tabular-nums;
-      opacity: 0.7;
+      white-space: nowrap; font-variant-numeric: tabular-nums;
     }
     #status-context.warn { color: var(--gold); opacity: 1; }
     #status-context.crit { color: #C94040; opacity: 1; }
@@ -735,55 +766,37 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     #ctx-bar.warn { background: var(--gold); }
     #ctx-bar.crit { background: #C94040; }
 
-    /* ── Dropdowns (session picker + status model menu) ── */
+    /* ── Dropdowns ──────────────────────────────────── */
     .status-dropdown {
-      position: absolute;
-      top: calc(100% + 1px);
-      left: 0; right: 0;
-      background: var(--vscode-sideBar-background);
-      border: 1px solid rgba(245,197,66,0.4);
-      border-top: none;
-      border-radius: 0 0 4px 4px;
-      z-index: 200;
-      overflow: hidden;
+      position: absolute; top: calc(100% + 1px); left: 0; right: 0;
+      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-sideBarSectionHeader-border));
+      border-radius: 0 0 4px 4px; z-index: 200; overflow: hidden;
     }
     .status-dropdown .menu-item {
-      padding: 6px 10px;
-      font-size: 0.8em;
-      font-family: var(--ui-font);
-      color: var(--vscode-foreground);
-      cursor: pointer;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      display: flex;
-      align-items: center;
-      gap: 6px;
+      padding: 5px 10px; font-size: 0.82em; font-family: var(--ui-font);
+      color: var(--vscode-foreground); cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      display: flex; align-items: center; gap: 6px;
     }
-    .status-dropdown .menu-item:hover { background: rgba(245,197,66,0.12); color: var(--gold); }
+    .status-dropdown .menu-item:hover { background: var(--gold-subtle); }
     .status-dropdown .menu-item.active { color: var(--gold); font-weight: 600; }
     .status-dropdown .menu-item .item-meta {
       opacity: 0.4; font-size: 0.85em; margin-left: auto; flex-shrink: 0;
     }
     .status-dropdown .menu-footer {
-      padding: 5px 10px;
-      font-size: 0.8em;
-      font-family: var(--ui-font);
-      color: var(--gold-dim);
-      cursor: pointer;
-      border-top: 1px solid rgba(245,197,66,0.15);
+      padding: 5px 10px; font-size: 0.82em; font-family: var(--ui-font);
+      color: var(--vscode-descriptionForeground); cursor: pointer;
+      border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
     }
-    .status-dropdown .menu-footer:hover { background: rgba(245,197,66,0.08); color: var(--gold); }
+    .status-dropdown .menu-footer:hover { background: var(--gold-subtle); color: var(--gold); }
     .session-action {
       opacity: 0; cursor: pointer; font-size: 0.9em; flex-shrink: 0;
       padding: 0 2px; transition: opacity 0.15s;
     }
     .menu-item:hover .session-action { opacity: 0.5; }
     .session-action:hover { opacity: 1 !important; }
-    .delete-session:hover { color: #C94040; }
-    .status-dropdown .menu-sep {
-      border-top: 1px solid rgba(245,197,66,0.15);
-    }
+    .delete-session:hover { color: var(--vscode-errorForeground, #C94040); }
 
     /* ── Messages ───────────────────────────────────── */
     #messages {
@@ -806,9 +819,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       align-self: flex-end;
       max-width: 88%;
       white-space: pre-wrap;
-      background: #C86828;
-      color: #FFF3E8;
-      border-radius: 10px 10px 2px 10px;
+      background: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.15));
+      border-left: 3px solid var(--gold);
+      color: var(--vscode-foreground);
+      border-radius: 4px;
       padding: 6px 10px;
     }
     .msg.user .context-annotation {
@@ -874,8 +888,32 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       opacity: 0.6; word-break: break-all; overflow-wrap: anywhere;
       min-width: 0;
     }
-    /* Prevent horizontal overflow — only on the scroll container */
+    /* Prevent horizontal overflow */
     #messages { overflow-x: hidden; }
+
+    /* ── Empty state ──────────────────────────────── */
+    #empty-state {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 12px; padding: 24px 16px;
+      flex: 1; text-align: center;
+    }
+    #empty-state .empty-logo { font-size: 2.5em; color: var(--gold); opacity: 0.5; }
+    #empty-state .empty-title {
+      font-family: var(--ui-font); font-size: 0.95em;
+      color: var(--vscode-descriptionForeground);
+    }
+    #empty-state .prompt-chips {
+      display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 260px;
+    }
+    .prompt-chip {
+      background: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.1));
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.2));
+      border-radius: 6px; padding: 8px 12px;
+      font-family: var(--ui-font); font-size: 0.85em;
+      color: var(--vscode-foreground); cursor: pointer;
+      text-align: left; transition: border-color 0.15s;
+    }
+    .prompt-chip:hover { border-color: var(--gold); color: var(--gold); }
     .msg.agent pre { white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
     .msg.error {
       font-family: var(--ui-font);
@@ -885,18 +923,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     /* ── Todo overlay ──────────────────────────────── */
     #todo-overlay {
-      font-family: var(--ui-font);
-      font-size: 0.85em;
+      font-family: var(--ui-font); font-size: 0.82em;
       padding: 6px 10px;
-      border-bottom: 1px solid rgba(245,197,66,0.2);
-      background: rgba(245,197,66,0.04);
-      flex-shrink: 0;
-      display: none;
+      border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
+      background: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.05));
+      flex-shrink: 0; display: none;
     }
     #todo-overlay .todo-header {
-      font-weight: 700; font-size: 0.8em;
+      font-weight: 700; font-size: 0.78em;
       text-transform: uppercase; letter-spacing: 0.06em;
-      color: var(--gold); opacity: 0.7;
+      color: var(--vscode-descriptionForeground);
       margin-bottom: 4px;
     }
     #todo-overlay .todo-item {
@@ -1038,12 +1074,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       flex: 1;
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
-      border: 1px solid var(--gold-border);
-      border-radius: 2px; padding: 4px 6px;
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
+      border-radius: 4px; padding: 6px 8px;
       font-family: inherit; font-size: inherit;
       resize: none; min-height: 0; height: 100%; overflow-y: auto;
     }
-    #input:focus { outline: none; border-color: rgba(245, 197, 66, 0.75); }
+    #input:focus { outline: none; border-color: var(--gold); }
     @keyframes input-glow {
       0%, 100% { border-color: rgba(245, 197, 66, 0.35); box-shadow: 0 0 3px rgba(245,197,66,0.1); }
       50%       { border-color: rgba(245, 197, 66, 0.65); box-shadow: 0 0 8px rgba(245,197,66,0.25); }
@@ -1060,35 +1096,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       letter-spacing: 0.02em; border: none; border-radius: 4px;
       cursor: pointer; padding: 5px 4px; width: 100%;
     }
-    #send-btn { background: #C86828; color: #FFF3E8; }
-    #send-btn:hover { background: #E07830; }
+    #send-btn { background: var(--gold); color: #1e1e1e; }
+    #send-btn:hover { background: #E8C940; }
     #busy-btns { display: none; gap: 2px; width: 100%; }
-    #stop-btn { flex: 1; background: #C94040; color: #FFE8E8; font-size: 1em; padding: 4px 2px; }
-    #stop-btn:hover { background: #E05050; }
-    #queue-btn { flex: 1; background: #C86828; color: #FFF3E8; font-size: 1em; padding: 4px 2px; }
-    #queue-btn:hover { background: #E07830; }
+    #stop-btn { flex: 1; background: var(--vscode-errorForeground, #C94040); color: #FFF; font-size: 1em; padding: 4px 2px; }
+    #stop-btn:hover { opacity: 0.85; }
+    #queue-btn { flex: 1; background: var(--gold); color: #1e1e1e; font-size: 1em; padding: 4px 2px; }
+    #queue-btn:hover { opacity: 0.85; }
 
-    /* Logo + brand below */
+    /* Logo */
     #logo-mark {
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      height: 100%; min-height: 52px; opacity: 0.90; gap: 2px;
+      display: flex; align-items: center; justify-content: center;
+      height: 100%; min-height: 44px; opacity: 0.80;
     }
-    #logo-mark img { width: 52px; height: 52px; object-fit: contain; transition: filter 0.4s ease; }
-    #logo-brand-row {
-      display: flex; align-items: center; gap: 1px; line-height: 1;
-    }
-    #logo-caduceus {
-      font-size: 1.8em; color: var(--gold);
-      filter: drop-shadow(0 0 3px rgba(245,197,66,0.4));
-    }
-    #logo-text {
-      font-family: var(--ui-font); font-size: 0.85em; font-weight: 700;
-      color: var(--gold); letter-spacing: 0.06em;
-    }
-    #logo-mark #status-version {
-      font-family: var(--ui-font); font-size: 0.65em;
-      color: var(--gold); opacity: 0.6;
-    }
+    #logo-mark img { width: 40px; height: 40px; object-fit: contain; transition: filter 0.4s ease; }
     @keyframes hermes-glow {
       0%, 100% { filter: drop-shadow(0 0 3px rgba(245, 197, 66, 0.25)); }
       50%       { filter: drop-shadow(0 0 10px rgba(245, 197, 66, 0.85)); }
@@ -1104,63 +1125,83 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     #bottom-bar {
       display: flex; align-items: center; gap: 4px;
       padding: 4px 8px 5px;
-      border-top: 1px solid rgba(245, 197, 66, 0.2);
+      border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
       flex-shrink: 0; font-family: var(--ui-font); position: relative;
     }
     #model-switcher { position: relative; flex: 1; min-width: 0; }
     #model-btn {
       width: 100%; background: transparent;
-      border: 1px solid var(--gold-border); border-radius: 3px;
-      color: var(--gold-dim); font-family: var(--ui-font);
-      font-size: 0.9em; font-weight: 500; padding: 4px 8px;
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
+      border-radius: 4px;
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--ui-font);
+      font-size: 0.85em; font-weight: 500; padding: 0 8px;
       cursor: pointer; text-align: left; white-space: nowrap;
-      overflow: hidden; text-overflow: ellipsis;
+      overflow: hidden; text-overflow: ellipsis; height: var(--toolbar-height);
     }
-    #model-btn:hover { border-color: rgba(245,197,66,0.75); color: var(--gold); }
+    #model-btn:hover { color: var(--gold); border-color: var(--gold-border); }
     #model-menu {
       position: absolute; bottom: calc(100% + 4px); left: 0;
-      background: var(--vscode-sideBar-background);
-      border: 1px solid rgba(245,197,66,0.5);
+      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-sideBarSectionHeader-border));
       border-radius: 4px; min-width: 180px; z-index: 100; overflow: hidden;
     }
     .model-option {
-      padding: 6px 10px; font-size: 0.9em; font-family: var(--ui-font);
+      padding: 5px 10px; font-size: 0.85em; font-family: var(--ui-font);
       color: var(--vscode-foreground); cursor: pointer; white-space: nowrap;
     }
-    .model-option:hover { background: rgba(245,197,66,0.12); color: var(--gold); }
+    .model-option:hover { background: var(--gold-subtle); color: var(--gold); }
     .model-option.active { color: var(--gold); font-weight: 600; }
     .model-option.active::before { content: '✓ '; }
     .model-group-label {
       padding: 4px 10px 2px; font-size: 0.7em; font-family: var(--ui-font);
-      color: var(--gold); opacity: 0.5; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--vscode-descriptionForeground); opacity: 0.7;
+      text-transform: uppercase; letter-spacing: 0.06em;
     }
-    .model-sep { border-top: 1px solid rgba(245,197,66,0.15); margin: 2px 0; }
+    .model-sep { border-top: 1px solid var(--vscode-sideBarSectionHeader-border); margin: 2px 0; }
 
     .cmd-btn {
-      background: transparent; border: 1px solid var(--gold-border); border-radius: 4px;
-      color: var(--gold-dim); font-family: var(--ui-font);
-      font-size: 0.9em; font-weight: 500; padding: 4px 8px;
+      background: transparent;
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
+      border-radius: 4px;
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--ui-font); font-size: 0.9em; font-weight: 500; padding: 0;
       cursor: pointer; white-space: nowrap; flex-shrink: 0;
-      display: inline-flex; align-items: center; gap: 3px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+      width: var(--toolbar-height); height: var(--toolbar-height);
     }
-    .cmd-btn:hover { border-color: rgba(245,197,66,0.75); color: var(--gold); background: rgba(245,197,66,0.06); }
-    .cmd-btn:active { background: rgba(245,197,66,0.12); }
+    .cmd-btn:hover { color: var(--gold); border-color: var(--gold-border); }
+    .cmd-btn:active { background: var(--gold-subtle); }
     .cmd-btn .btn-icon { font-size: 1.3em; }
-    #skills-btn.has-skills { color: var(--gold); border-color: rgba(245,197,66,0.6); }
+    #skills-btn.has-skills { color: var(--gold); border-color: var(--gold-border); }
+
+    /* Overflow menu */
+    #overflow-menu {
+      position: absolute; bottom: calc(100% + 4px); right: 0;
+      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-sideBarSectionHeader-border));
+      border-radius: 4px; min-width: 180px; z-index: 100; overflow: hidden;
+    }
+    #overflow-menu .menu-item {
+      padding: 6px 10px; font-size: 0.85em; font-family: var(--ui-font);
+      color: var(--vscode-foreground); cursor: pointer;
+    }
+    #overflow-menu .menu-item:hover { background: var(--gold-subtle); }
 
     /* Skills picker */
     #skills-menu {
       position: absolute; bottom: calc(100% + 4px); right: 0;
-      background: var(--vscode-sideBar-background);
-      border: 1px solid rgba(245,197,66,0.5);
+      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-sideBarSectionHeader-border));
       border-radius: 4px; min-width: 240px; max-width: 320px;
       max-height: 350px; overflow-y: auto; z-index: 100;
     }
     .skill-group-label {
       padding: 4px 10px 2px; font-size: 0.68em; font-family: var(--ui-font);
-      color: var(--gold); opacity: 0.5; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--vscode-descriptionForeground); opacity: 0.7;
+      text-transform: uppercase; letter-spacing: 0.06em;
       position: sticky; top: 0;
-      background: var(--vscode-sideBar-background);
+      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
     }
     .skill-option {
       padding: 3px 10px; font-size: 0.78em; font-family: var(--ui-font);
@@ -1168,7 +1209,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       overflow: hidden; text-overflow: ellipsis;
       display: flex; align-items: center; gap: 6px;
     }
-    .skill-option:hover { background: rgba(245,197,66,0.08); }
+    .skill-option:hover { background: var(--gold-subtle); }
     .skill-option.selected { color: var(--gold); font-weight: 600; }
     .skill-option.selected::before { content: '✓ '; flex-shrink: 0; }
     .skill-option .skill-desc {
@@ -1177,16 +1218,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   </style>
 </head>
 <body>
-  <div id="status-bar">
-    <button id="status-session" title="Sessions">new session</button>
-    <div id="status-right">
-      <div id="ctx-bar-wrap" style="display:none"><div id="ctx-bar"></div></div>
-      <span id="status-context"></span>
+  <div id="header">
+    <div id="header-brand">
+      <span class="brand-icon">☤</span>
+      <span class="brand-text">Hermes</span>
+      <span class="brand-version" id="status-version"></span>
+      <span class="brand-sep">·</span>
+      <button id="model-btn-header" title="Switch model">${this.initialModel} ▾</button>
+    </div>
+    <div id="header-session">
+      <button id="status-session" title="Sessions">new session</button>
+      <div id="status-right">
+        <div id="ctx-bar-wrap" style="display:none"><div id="ctx-bar"></div></div>
+        <span id="status-context"></span>
+      </div>
     </div>
     <div id="session-picker" class="status-dropdown" style="display:none"></div>
   </div>
   <div id="todo-overlay"></div>
-  <div id="messages"></div>
+  <div id="messages">
+    <div id="empty-state">
+      <div class="empty-logo">☤</div>
+      <div class="empty-title">What can I help you with?</div>
+      <div class="prompt-chips">
+        <div class="prompt-chip" data-prompt="Review this file">Review this file</div>
+        <div class="prompt-chip" data-prompt="Explain the selected code">Explain the selected code</div>
+        <div class="prompt-chip" data-prompt="Find bugs in this project">Find bugs in this project</div>
+        <div class="prompt-chip" data-prompt="Write tests for this module">Write tests for this module</div>
+      </div>
+    </div>
+  </div>
   <div id="input-drag"></div>
   <div id="context-row">
     <div id="attach-chip"></div>
@@ -1201,27 +1262,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           <button id="queue-btn">▶</button>
         </div>
       </div>
-      <div id="logo-mark">
-        <img src="${logoUri}" alt="Hermes"/>
-        <div id="logo-brand-row"><span id="logo-caduceus">☤</span><span id="logo-text">Hermes</span></div>
-        <span id="status-version"></span>
-      </div>
+      <div id="logo-mark"><img src="${logoUri}" alt="Hermes"/></div>
     </div>
   </div>
   <div id="queue-status"></div>
   <div id="bottom-bar">
     <button class="cmd-btn" id="attach-btn" title="Attach file"><span class="btn-icon">⊕</span></button>
-    <button class="cmd-btn" id="skills-btn" title="Select skills"><span class="btn-icon">✦</span></button>
-    <div id="model-switcher">
-      <button id="model-btn" title="Switch model">⚡ ${this.initialModel} ▾</button>
+    <button class="cmd-btn" id="skills-btn" title="Skills"><span class="btn-icon">✦</span></button>
+    <div style="flex:1"></div>
+    <button class="cmd-btn" id="overflow-btn" title="More actions"><span class="btn-icon">···</span></button>
+    <div id="overflow-menu" style="display:none">
+      <div class="menu-item" data-cmd="/context">≡ Context info</div>
+      <div class="menu-item" data-cmd="/compact">⤓ Compress context</div>
+      <div class="menu-item" data-cmd="/reset">↺ Reset conversation</div>
+      <div class="menu-item" data-cmd="/help">? Help</div>
+    </div>
+    <div id="model-switcher" style="display:none">
+      <button id="model-btn" title="Switch model">${this.initialModel} ▾</button>
       <div id="model-menu" style="display:none">
         ${this.buildModelMenuItems()}
       </div>
     </div>
-    <button class="cmd-btn" data-cmd="/context" title="Context window info"><span class="btn-icon">≡</span></button>
-    <button class="cmd-btn" data-cmd="/compact" title="Compress context"><span class="btn-icon">⤓</span></button>
-    <button class="cmd-btn" data-cmd="/reset" title="Reset conversation"><span class="btn-icon">↺</span></button>
-    <button class="cmd-btn" data-cmd="/help" title="Show help"><span class="btn-icon">?</span></button>
     <div id="skills-menu" style="display:none"></div>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>

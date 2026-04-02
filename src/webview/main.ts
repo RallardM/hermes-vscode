@@ -47,7 +47,11 @@ const statusVersionEl  = document.getElementById('status-version')!;
 const ctxBarWrap       = document.getElementById('ctx-bar-wrap') as HTMLDivElement;
 const ctxBar           = document.getElementById('ctx-bar') as HTMLDivElement;
 const modelBtn         = document.getElementById('model-btn') as HTMLButtonElement;
+const modelBtnHeader   = document.getElementById('model-btn-header') as HTMLButtonElement;
 const modelMenu        = document.getElementById('model-menu') as HTMLDivElement;
+const overflowBtn      = document.getElementById('overflow-btn') as HTMLButtonElement;
+const overflowMenu     = document.getElementById('overflow-menu') as HTMLDivElement;
+const emptyState       = document.getElementById('empty-state') as HTMLDivElement;
 const sessionPicker    = document.getElementById('session-picker') as HTMLDivElement;
 const logoMark         = document.getElementById('logo-mark')!;
 
@@ -218,6 +222,7 @@ function closeAllDropdowns(): void {
   modelMenu.style.display = 'none';
   sessionPicker.style.display = 'none';
   skillsMenu.style.display = 'none';
+  overflowMenu.style.display = 'none';
 }
 
 // ── RAF batching ──────────────────────────────────────
@@ -258,7 +263,8 @@ function updateStatusBar(model?: string, sessionTitle?: string, contextUsed?: nu
   if (version !== undefined) statusVersionEl.textContent = version ? ` ${version}` : '';
   if (model) {
     currentModel = model;
-    modelBtn.textContent = `⚡ ${model} ▾`;
+    modelBtn.textContent = `${model} ▾`;
+    modelBtnHeader.textContent = `${model} ▾`;
     modelMenu.querySelectorAll<HTMLElement>('.model-option').forEach(el => {
       el.classList.toggle('active', el.dataset.command === model || el.dataset.command?.endsWith(':' + model));
     });
@@ -289,15 +295,51 @@ function buildSessionPicker(sessions: { id: string; title: string; createdAt: nu
   const active = sessions.find(s => s.id === activeId);
   if (active) statusSessionEl.textContent = active.title;
 
-  sessionPicker.innerHTML = sessions.map(s => {
+  sessionPicker.replaceChildren();
+
+  for (const s of sessions) {
     const isActive = s.id === activeId;
-    return `<div class="menu-item${isActive ? ' active' : ''}" data-session-id="${s.id}">
-      ${isActive ? '✓ ' : ''}<span style="overflow:hidden;text-overflow:ellipsis;flex:1">${DOMPurify.sanitize(s.title)}</span>
-      <span class="item-meta">${fmtAge(s.createdAt)}</span>
-      <span class="session-action rename-session" data-session-id="${s.id}" title="Rename">✎</span>
-      <span class="session-action delete-session" data-session-id="${s.id}" title="Delete">✕</span>
-    </div>`;
-  }).join('') + `<div class="menu-footer">＋ New session</div>`;
+    const item = document.createElement('div');
+    item.className = `menu-item${isActive ? ' active' : ''}`;
+    item.dataset.sessionId = s.id;
+
+    if (isActive) {
+      item.append('✓ ');
+    }
+
+    const title = document.createElement('span');
+    title.style.overflow = 'hidden';
+    title.style.textOverflow = 'ellipsis';
+    title.style.flex = '1';
+    title.textContent = s.title;
+    item.appendChild(title);
+
+    const meta = document.createElement('span');
+    meta.className = 'item-meta';
+    meta.textContent = fmtAge(s.createdAt);
+    item.appendChild(meta);
+
+    const rename = document.createElement('span');
+    rename.className = 'session-action rename-session';
+    rename.dataset.sessionId = s.id;
+    rename.title = 'Rename';
+    rename.textContent = '✎';
+    item.appendChild(rename);
+
+    const del = document.createElement('span');
+    del.className = 'session-action delete-session';
+    del.dataset.sessionId = s.id;
+    del.title = 'Delete';
+    del.textContent = '✕';
+    item.appendChild(del);
+
+    sessionPicker.appendChild(item);
+  }
+
+  const footer = document.createElement('div');
+  footer.className = 'menu-footer';
+  footer.textContent = '＋ New session';
+  sessionPicker.appendChild(footer);
 }
 
 statusSessionEl.addEventListener('click', (e: MouseEvent) => {
@@ -338,12 +380,40 @@ sessionPicker.addEventListener('click', (e: MouseEvent) => {
   }
 });
 
-// ── Bottom bar model switcher ─────────────────────────
+// ── Model switcher (header button opens the hidden bottom bar menu) ──
+modelBtnHeader.addEventListener('click', (e: MouseEvent) => {
+  e.stopPropagation();
+  const open = modelMenu.style.display !== 'none';
+  closeAllDropdowns();
+  if (!open) modelMenu.style.display = 'block';
+});
 modelBtn.addEventListener('click', (e: MouseEvent) => {
   e.stopPropagation();
   const open = modelMenu.style.display !== 'none';
   closeAllDropdowns();
   if (!open) modelMenu.style.display = 'block';
+});
+
+// ── Overflow menu ────────────────────────────────────
+overflowBtn.addEventListener('click', (e: MouseEvent) => {
+  e.stopPropagation();
+  const open = overflowMenu.style.display !== 'none';
+  closeAllDropdowns();
+  if (!open) overflowMenu.style.display = 'block';
+});
+overflowMenu.addEventListener('click', (e: MouseEvent) => {
+  const item = (e.target as HTMLElement).closest<HTMLElement>('.menu-item[data-cmd]');
+  if (!item?.dataset.cmd) return;
+  closeAllDropdowns();
+  vscode.postMessage({ type: 'send', text: item.dataset.cmd });
+});
+
+// ── Empty state prompt chips ─────────────────────────
+emptyState?.addEventListener('click', (e: MouseEvent) => {
+  const chip = (e.target as HTMLElement).closest<HTMLElement>('.prompt-chip');
+  if (!chip?.dataset.prompt) return;
+  inputEl.value = chip.dataset.prompt;
+  inputEl.focus();
 });
 
 modelMenu.addEventListener('click', (e: MouseEvent) => {
@@ -443,14 +513,31 @@ let skillGroupsData: { category: string; skills: { name: string; description: st
 let selectedSkillNames = new Set<string>();
 
 function buildSkillsMenu(): void {
-  skillsMenu.innerHTML = skillGroupsData.map(g => {
-    const items = g.skills.map(s => {
-      const sel = selectedSkillNames.has(s.name) ? ' selected' : '';
-      const desc = s.description ? `<span class="skill-desc">${s.description}</span>` : '';
-      return `<div class="skill-option${sel}" data-skill="${s.name}">${s.name} ${desc}</div>`;
-    }).join('');
-    return `<div class="skill-group-label">${g.category}</div>${items}`;
-  }).join('');
+  skillsMenu.replaceChildren();
+
+  for (const group of skillGroupsData) {
+    const label = document.createElement('div');
+    label.className = 'skill-group-label';
+    label.textContent = group.category;
+    skillsMenu.appendChild(label);
+
+    for (const skill of group.skills) {
+      const option = document.createElement('div');
+      option.className = `skill-option${selectedSkillNames.has(skill.name) ? ' selected' : ''}`;
+      option.dataset.skill = skill.name;
+      option.append(document.createTextNode(skill.name));
+
+      if (skill.description) {
+        option.append(document.createTextNode(' '));
+        const desc = document.createElement('span');
+        desc.className = 'skill-desc';
+        desc.textContent = skill.description;
+        option.appendChild(desc);
+      }
+
+      skillsMenu.appendChild(option);
+    }
+  }
 }
 
 skillsBtn.addEventListener('click', (e: MouseEvent) => {
@@ -502,6 +589,8 @@ function send(): void {
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = '';
+  // Hide empty state on first message
+  if (emptyState) emptyState.style.display = 'none';
   inputEl.style.height = '';
   // Clear attachment chip + skills after send
   attachChip.style.display = 'none';
@@ -534,6 +623,7 @@ requestAnimationFrame(syncComposerHeight);
 
 // ── Load stored history ───────────────────────────────
 function loadHistory(history: StoredMessage[], isSwitched = false): void {
+  if (emptyState && history.length > 0) emptyState.style.display = 'none';
   for (const m of history) {
     if (m.role === 'user') {
       appendMessage('user', m.text);
@@ -715,9 +805,19 @@ window.addEventListener('message', (e: MessageEvent) => {
       // Handle attached file chips (multiple)
       if (msg.attachedFiles !== undefined) {
         if (msg.attachedFiles && msg.attachedFiles.length > 0) {
-          attachChip.innerHTML = msg.attachedFiles.map((f: {name: string}) =>
-            `⊕ <span class="chip-name">${f.name}</span>`
-          ).join(' ') + ' <span class="chip-x">✕</span>';
+          attachChip.replaceChildren();
+          msg.attachedFiles.forEach((f: {name: string}) => {
+            attachChip.append(document.createTextNode('⊕ '));
+            const chip = document.createElement('span');
+            chip.className = 'chip-name';
+            chip.textContent = f.name;
+            attachChip.appendChild(chip);
+            attachChip.append(document.createTextNode(' '));
+          });
+          const clear = document.createElement('span');
+          clear.className = 'chip-x';
+          clear.textContent = '✕';
+          attachChip.appendChild(clear);
           attachChip.style.display = 'flex';
         } else {
           attachChip.style.display = 'none';

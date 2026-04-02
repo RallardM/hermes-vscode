@@ -36,10 +36,16 @@ export class AcpClient extends EventEmitter {
   private requestHandler: IncomingRequestHandler | null = null;
 
   constructor(
-    private readonly hermesPath: string,
+    private hermesPath: string,
     private readonly envOverrides: NodeJS.ProcessEnv = {},
+    private readonly debugLogging = false,
   ) {
     super();
+  }
+
+  setHermesPath(nextPath: string): void {
+    if (this.proc) return;
+    this.hermesPath = nextPath;
   }
 
   onNotification(handler: NotificationHandler): void {
@@ -105,7 +111,9 @@ export class AcpClient extends EventEmitter {
 
     const id = this.nextId++;
     const message = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
-    this.emit('log', `[acp] --> ${method} #${id} ${this.preview(params)}`);
+    this.emit('log', this.debugLogging
+      ? `[acp] --> ${method} #${id} ${this.preview(params)}`
+      : `[acp] --> ${method} #${id}`);
 
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -117,7 +125,9 @@ export class AcpClient extends EventEmitter {
   notify(method: string, params: unknown): void {
     if (!this.proc) return;
     const message = JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n';
-    this.emit('log', `[acp] ~~> ${method} ${this.preview(params)}`);
+    this.emit('log', this.debugLogging
+      ? `[acp] ~~> ${method} ${this.preview(params)}`
+      : `[acp] ~~> ${method}`);
     this.proc.stdin!.write(message);
   }
 
@@ -143,7 +153,9 @@ export class AcpClient extends EventEmitter {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      this.emit('log', `[acp raw] ${trimmed.slice(0, 500)}`);
+      if (this.debugLogging) {
+        this.emit('log', `[acp raw] ${trimmed.slice(0, 500)}`);
+      }
       try {
         this.dispatch(JSON.parse(trimmed));
       } catch {
@@ -168,12 +180,16 @@ export class AcpClient extends EventEmitter {
         this.emit('log', `[acp] <-- #${msg.id} ERROR ${err.code}: ${err.message}`);
         pending.reject(new Error(`ACP error ${err.code}: ${err.message}`));
       } else {
-        this.emit('log', `[acp] <-- #${msg.id} OK ${this.preview(msg.result)}`);
+        this.emit('log', this.debugLogging
+          ? `[acp] <-- #${msg.id} OK ${this.preview(msg.result)}`
+          : `[acp] <-- #${msg.id} OK`);
         pending.resolve(msg.result);
       }
     } else if (msg.method) {
       // Notification (no id)
-      this.emit('log', `[acp] <-- ${msg.method} ${this.preview(msg.params)}`);
+      this.emit('log', this.debugLogging
+        ? `[acp] <-- ${msg.method} ${this.preview(msg.params)}`
+        : `[acp] <-- ${msg.method}`);
       this.notificationHandler?.(msg.method as string, msg.params);
     }
   }

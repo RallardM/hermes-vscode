@@ -1,5 +1,23 @@
 # Change Log
 
+## [1.0.4] - 2026-04-02
+
+Security and stability hardening release.
+
+### Security
+- Require trusted-workspace behavior before launching Hermes
+- Ignore workspace-scoped `hermes.path` overrides and constrain the setting to machine scope
+- Prompt before launching a new Hermes binary path and remember approved binaries
+- Replace blanket permission auto-approval with explicit per-request prompts
+- Restrict webview local resource access to the extension media cache instead of `~` and `/tmp`
+- Reduce default log exposure by turning diagnostic logging off by default and trimming prompt payload logging
+- Escape model menu content and remove HTML string insertion for skill/session/file-chip UI built from local metadata
+
+### UI
+- Normalize bottom-toolbar button sizing and focus styles
+- Tighten toolbar layout for narrow sidebars
+- Keep attachment chips and dropdown labels consistent without HTML injection glitches
+
 ## [1.0.0] - 2026-04-02
 
 Initial public release of the Hermes AI Agent extension for VS Code.

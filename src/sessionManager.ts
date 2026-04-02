@@ -26,6 +26,8 @@
 
 import { AcpClient } from './acpClient';
 
+export type PermissionRequestHandler = (method: string, params: unknown) => Promise<unknown>;
+
 export interface SessionUpdateEvent {
   session_id: string;
   text?: string;
@@ -68,6 +70,7 @@ export class SessionManager {
   constructor(
     private readonly client: AcpClient,
     private readonly log: (line: string) => void = () => {},
+    private readonly permissionRequestHandler?: PermissionRequestHandler,
   ) {
     client.onNotification((method, params) => {
       if (method === 'session/update') {
@@ -77,7 +80,10 @@ export class SessionManager {
 
     client.onIncomingRequest(async (method, _params) => {
       if (method === 'session/request_permission') {
-        return { outcome: 'selected', optionId: 'allow_once' };
+        if (!this.permissionRequestHandler) {
+          throw new Error('Permission denied: no approval handler registered');
+        }
+        return this.permissionRequestHandler(method, _params);
       }
       throw new Error(`Unhandled client method: ${method}`);
     });
@@ -133,7 +139,7 @@ export class SessionManager {
 
   async sendPrompt(text: string, cwd: string): Promise<void> {
     const sessionId = await this.ensureSession(cwd);
-    this.log(`[session] prompt ${sessionId}: ${text.slice(0, 120)}`);
+    this.log(`[session] prompt ${sessionId} (${text.length} chars)`);
     this.accumulated = '';
     this.cancelled = false;
 

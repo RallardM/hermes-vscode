@@ -4,10 +4,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { AcpClient } from './acpClient';
-import { SessionManager } from './sessionManager';
+import { PermissionRequestHandler, SessionManager } from './sessionManager';
 import { ChatPanelProvider } from './chatPanel';
 
 const DEFAULT_SONNET_MODEL = 'claude-sonnet-4-6';
+const APPROVED_BINARIES_KEY = 'hermes.approvedBinaries';
 
 function extractModelFromHermesConfig(content: string): string | null {
   const lines = content.split(/\r?\n/);
@@ -69,6 +70,127 @@ function readHermesVersion(hermesPath: string): string {
   }
 }
 
+function readConfiguredHermesPath(): { value: string; workspaceOverrideIgnored: boolean } {
+  const hermesConfig = vscode.workspace.getConfiguration('hermes');
+  const inspected = hermesConfig.inspect<string>('path');
+  const workspaceOverrideIgnored = !!(inspected?.workspaceValue || inspected?.workspaceFolderValue);
+  const value = inspected?.globalValue ?? inspected?.defaultValue ?? 'hermes';
+  return { value, workspaceOverrideIgnored };
+}
+
+function resolveHermesBinary(configuredPath: string): string {
+  let hermesPath = configuredPath;
+
+  if (hermesPath !== 'hermes' && !path.isAbsolute(hermesPath)) {
+    throw new Error('hermes.path must be an absolute path or the default "hermes" value');
+  }
+
+  if (hermesPath === 'hermes') {
+    try {
+      const resolved = execFileSync('which', ['hermes'], { timeout: 3000, encoding: 'utf8' }).trim();
+      if (resolved) hermesPath = resolved;
+    } catch {
+      // not in PATH
+    }
+
+    if (hermesPath === 'hermes') {
+      const tryPaths = [
+        path.join(os.homedir(), '.local', 'bin', 'hermes'),
+        '/usr/local/bin/hermes',
+        '/usr/bin/hermes',
+      ];
+      for (const candidate of tryPaths) {
+        try {
+          if (fs.existsSync(candidate)) {
+            hermesPath = candidate;
+            break;
+          }
+        } catch {
+          // skip unreadable candidate
+        }
+      }
+    }
+  }
+
+  if (!path.isAbsolute(hermesPath)) {
+    throw new Error(`Unable to resolve hermes binary from setting "${configuredPath}"`);
+  }
+  if (!fs.existsSync(hermesPath)) {
+    throw new Error(`Configured hermes binary does not exist: ${hermesPath}`);
+  }
+
+  return hermesPath;
+}
+
+async function ensureTrustedBinary(
+  context: vscode.ExtensionContext,
+  hermesPath: string,
+): Promise<boolean> {
+  const approved = context.globalState.get<string[]>(APPROVED_BINARIES_KEY, []);
+  if (approved.includes(hermesPath)) return true;
+
+  const allow = 'Allow';
+  const choice = await vscode.window.showWarningMessage(
+    `Hermes wants to launch this local binary:\n${hermesPath}\n\nOnly allow binaries you trust.`,
+    { modal: true },
+    allow,
+  );
+  if (choice !== allow) return false;
+
+  await context.globalState.update(APPROVED_BINARIES_KEY, [...new Set([...approved, hermesPath])]);
+  return true;
+}
+
+function summarizePermissionRequest(params: unknown): string {
+  if (!params || typeof params !== 'object') return 'Hermes requested permission for an action.';
+  const record = params as Record<string, unknown>;
+  const toolName = typeof record.toolName === 'string'
+    ? record.toolName
+    : typeof record.title === 'string'
+      ? record.title
+      : typeof record.kind === 'string'
+        ? record.kind
+        : 'an action';
+  const reason = typeof record.reason === 'string'
+    ? record.reason
+    : typeof record.description === 'string'
+      ? record.description
+      : '';
+  return reason
+    ? `Hermes requested permission for ${toolName}: ${reason}`
+    : `Hermes requested permission for ${toolName}.`;
+}
+
+function optionIdByIntent(params: unknown, intent: 'allow' | 'deny'): string | null {
+  if (!params || typeof params !== 'object') return null;
+  const options = (params as { options?: Array<Record<string, unknown>> }).options;
+  if (!Array.isArray(options)) return null;
+
+  const preferredAllow = ['allow_once', 'allow', 'approve', 'yes'];
+  const preferredDeny = ['deny_once', 'deny', 'reject', 'no'];
+  const preferred = intent === 'allow' ? preferredAllow : preferredDeny;
+
+  for (const keyword of preferred) {
+    const match = options.find((option) => {
+      const id = typeof option.optionId === 'string' ? option.optionId : typeof option.id === 'string' ? option.id : '';
+      return id.toLowerCase().includes(keyword);
+    });
+    if (match) {
+      return (typeof match.optionId === 'string' ? match.optionId : match.id) as string;
+    }
+  }
+
+  if (intent === 'allow') {
+    const fallback = options.find((option) => {
+      const id = typeof option.optionId === 'string' ? option.optionId : typeof option.id === 'string' ? option.id : '';
+      return id && !/deny|reject|no/i.test(id);
+    });
+    return (typeof fallback?.optionId === 'string' ? fallback.optionId : fallback?.id as string | undefined) ?? null;
+  }
+
+  return null;
+}
+
 let client: AcpClient | null = null;
 let outputChannel: vscode.OutputChannel;
 
@@ -76,45 +198,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   outputChannel = vscode.window.createOutputChannel('Hermes');
   context.subscriptions.push(outputChannel);
 
-  // Locate the hermes binary — resolve full path if 'hermes' isn't in PATH
-  const hermesConfig = vscode.workspace.getConfiguration('hermes');
-  let hermesPath = hermesConfig.get<string>('path', 'hermes')!;
+  const configuredHermes = readConfiguredHermesPath();
+  if (configuredHermes.workspaceOverrideIgnored) {
+    outputChannel.appendLine('[security] Ignoring workspace-scoped hermes.path override');
+  }
+
+  let hermesPath = configuredHermes.value;
 
   outputChannel.appendLine(`[hermes] homedir: ${os.homedir()}`);
   outputChannel.appendLine(`[hermes] platform: ${process.platform}`);
-
-  if (hermesPath === 'hermes') {
-    // Try `which` first (respects full shell PATH)
-    try {
-      const resolved = execFileSync('which', ['hermes'], { timeout: 3000, encoding: 'utf8' }).trim();
-      if (resolved) hermesPath = resolved;
-    } catch { /* not in PATH */ }
-
-    // Fallback: try common install locations
-    if (hermesPath === 'hermes') {
-      const tryPaths = [
-        path.join(os.homedir(), '.local', 'bin', 'hermes'),
-        '/usr/local/bin/hermes',
-        '/usr/bin/hermes',
-      ];
-      for (const p of tryPaths) {
-        try {
-          if (fs.existsSync(p)) { hermesPath = p; break; }
-        } catch { /* skip */ }
-      }
-    }
+  try {
+    hermesPath = resolveHermesBinary(hermesPath);
+    outputChannel.appendLine(`[hermes] binary: ${hermesPath}`);
+  } catch (err) {
+    outputChannel.appendLine(`[security] invalid Hermes binary: ${err}`);
   }
-  outputChannel.appendLine(`[hermes] binary: ${hermesPath}`);
+
+  const hermesConfig = vscode.workspace.getConfiguration('hermes');
   const debugLogs = hermesConfig.get<boolean>('debugLogs', false);
 
   client = new AcpClient(
     hermesPath,
     debugLogs ? { HERMES_LOG_LEVEL: 'DEBUG' } : {},
+    debugLogs,
   );
 
   if (debugLogs) {
     outputChannel.show(true);
-    outputChannel.appendLine('[hermes] ACP debug logging enabled');
+    outputChannel.appendLine('[hermes] ACP diagnostic logging enabled');
   }
 
   client.on('log', (line: string) => outputChannel.appendLine(line));
@@ -123,7 +234,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     setStatus('disconnected');
   });
 
-  const session = new SessionManager(client, line => outputChannel.appendLine(line));
+  const permissionHandler: PermissionRequestHandler = async (_method, params) => {
+    const allowOptionId = optionIdByIntent(params, 'allow');
+    const denyOptionId = optionIdByIntent(params, 'deny');
+    const allow = 'Allow Once';
+    const deny = 'Deny';
+    const choice = await vscode.window.showWarningMessage(
+      summarizePermissionRequest(params),
+      { modal: true },
+      allow,
+      deny,
+    );
+
+    if (choice === allow && allowOptionId) {
+      outputChannel.appendLine('[security] permission granted once');
+      return { outcome: 'selected', optionId: allowOptionId };
+    }
+
+    if (denyOptionId) {
+      outputChannel.appendLine('[security] permission denied');
+      return { outcome: 'selected', optionId: denyOptionId };
+    }
+
+    throw new Error('Permission denied by user');
+  };
+
+  const session = new SessionManager(client, line => outputChannel.appendLine(line), permissionHandler);
   const { model: hermesModel } = readHermesModel();
   const hermesVersion = readHermesVersion(hermesPath);
   const panel = new ChatPanelProvider(
@@ -178,6 +314,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   async function ensureConnected(): Promise<void> {
     if (!client) return;
+    if (!vscode.workspace.isTrusted) {
+      outputChannel.appendLine('[security] workspace is not trusted; Hermes launch blocked');
+      setStatus('disconnected');
+      void vscode.window.showWarningMessage('Hermes is disabled until this workspace is trusted.');
+      return;
+    }
+
+    try {
+      hermesPath = resolveHermesBinary(readConfiguredHermesPath().value);
+    } catch (err) {
+      setStatus('disconnected');
+      vscode.window.showErrorMessage(`Hermes: invalid binary path — ${err}`);
+      return;
+    }
+
+    const approved = await ensureTrustedBinary(context, hermesPath);
+    if (!approved) {
+      outputChannel.appendLine('[security] Hermes launch cancelled by user');
+      setStatus('disconnected');
+      return;
+    }
+    client.setHermesPath(hermesPath);
+
     outputChannel.appendLine('[acp] connecting');
     setStatus('connecting');
     try {
@@ -192,7 +351,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   // Auto-connect
-  ensureConnected();
+  if (vscode.workspace.isTrusted) {
+    void ensureConnected();
+  } else {
+    setStatus('disconnected');
+  }
 }
 
 export function deactivate(): void {
