@@ -609,7 +609,11 @@ function send(): void {
   skillsBtn.classList.remove('has-skills');
   skillsBtn.textContent = '✦';
   if (!isBusy) {
-    appendMessage('user', text);
+    // Un-sticky the previous user message
+    messagesEl.querySelector('.msg.user.sticky')?.classList.remove('sticky', 'expanded');
+    const userEl = appendMessage('user', text);
+    userEl.classList.add('sticky');
+    userEl.addEventListener('click', () => userEl.classList.toggle('expanded'));
     currentAgentEl = null; currentAgentText = ''; thinkingStatusEl = null; pendingText = '';
     showWaiting();
   } else {
