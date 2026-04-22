@@ -50,6 +50,10 @@ const OPENAI_CODEX_MODEL_IDS = [
   'gpt-5.3-codex-spark',
 ];
 
+// Custom models - manual entries for local servers
+const LLAMA_SERVER_MODEL =
+  'Qwen3.5-9b';
+
 const FALLBACK_LABELS: Record<string, string> = {
   'claude-opus-4-1-20250805': 'Claude Opus 4.1',
   'claude-opus-4-20250514': 'Claude Opus 4',
@@ -68,6 +72,8 @@ const FALLBACK_LABELS: Record<string, string> = {
   'gpt-5.1-codex-max': 'GPT-5.1 Codex Max',
   'gpt-5.1-codex-mini': 'GPT-5.1 Codex mini',
   'gpt-5.3-codex-spark': 'GPT-5.3 Codex Spark',
+  'bigatuna/Qwen3.5-9b-Sushi-Coder-RL-GGUF:Q8_0':
+    'Qwen3.5-9b (Llama Server)',
 };
 
 function readCache(): HermesModelCache | null {
@@ -111,5 +117,20 @@ export function loadHermesModelGroups(): ModelMenuGroup[] {
   return [
     buildGroup('Anthropic', 'anthropic', ANTHROPIC_MODEL_IDS, anthropic),
     buildGroup('OpenAI Codex', 'openai-codex', OPENAI_CODEX_MODEL_IDS, openai),
+    {
+      group: 'Custom',
+      items: [
+        {
+          id: LLAMA_SERVER_MODEL,
+          label: 'Qwen3.5-9b (Llama Server)',
+          command: LLAMA_SERVER_MODEL,
+        },
+        {
+          id: 'llama-custom',
+          label: 'Custom Model (llama.cpp)',
+          command: 'llama-custom',
+        },
+      ],
+    },
   ];
 }

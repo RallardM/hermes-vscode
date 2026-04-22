@@ -70,7 +70,7 @@ export interface ToWebview {
   type:
     | 'append' | 'thinking' | 'toolCall' | 'done'
     | 'error' | 'status' | 'clear' | 'busy'
-    | 'statusBar' | 'sessionList' | 'loadHistory';
+    | 'statusBar' | 'sessionList' | 'loadHistory' | 'llamaRequest';
   text?: string;
   toolName?: string;
   toolStatus?: string;
@@ -103,7 +103,7 @@ export interface FromWebview {
     | 'send' | 'switchModel' | 'cancel'
     | 'newSession' | 'switchSession'
     | 'attachFile' | 'pasteImage' | 'dropFiles' | 'clearAttachments'
-    | 'toggleSkill' | 'renameSession' | 'deleteSession';
+    | 'toggleSkill' | 'renameSession' | 'deleteSession' | 'llamaRequest';
   text?: string;
   sessionId?: string;
   model?: string;

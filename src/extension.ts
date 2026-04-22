@@ -85,19 +85,62 @@ function resolveHermesBinary(configuredPath: string): string {
     throw new Error('hermes.path must be an absolute path or the default "hermes" value');
   }
 
-  if (hermesPath === 'hermes') {
+  // Helper to check if a path is a hermes installation directory
+  function isHermesInstallDir(base: string): boolean {
+    return fs.existsSync(path.join(base, 'hermes')) ||
+           fs.existsSync(path.join(base, 'hermes-agent')) ||
+           fs.existsSync(path.join(base, 'hermes.yaml')) ||
+           fs.existsSync(path.join(base, 'hermes-agent.yaml'));
+  }
+
+  // Helper to find hermes in a venv
+  function findHermesInVenv(parentPath: string): string | null {
     try {
-      const resolved = execFileSync('which', ['hermes'], { timeout: 3000, encoding: 'utf8' }).trim();
+      // Check .venv sibling first (correct Python venv directory name)
+      const venvDotPath = path.join(parentPath, '.venv');
+      if (isHermesInstallDir(venvDotPath)) {
+        return path.join(venvDotPath, 'bin', 'hermes');
+      }
+      
+      // Also check for the .venv directory itself (with bin subdirectory)
+      if (isHermesInstallDir(venvDotPath)) {
+        return path.join(venvDotPath, 'bin', 'hermes');
+      }
+      
+      // Fallback: check common venv directory names (venv, virtualenv, etc.)
+      const venvNames = ['venv', 'virtualenv', 'virtualenv-win', 'env'];
+      for (const venvName of venvNames) {
+        const venvPath = path.join(parentPath, venvName);
+        if (isHermesInstallDir(venvPath)) {
+          return path.join(venvPath, 'bin', 'hermes');
+        }
+      }
+      
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (hermesPath === 'hermes') {
+    // Try platform-appropriate command to find hermes binary
+    const command = process.platform === 'win32' ? 'where' : 'which';
+    try {
+      const resolved = execFileSync(command, ['hermes'], { timeout: 3000, encoding: 'utf8' }).trim();
       if (resolved) hermesPath = resolved;
     } catch {
-      // not in PATH
+      // command not available or binary not in PATH
     }
 
     if (hermesPath === 'hermes') {
+      // Fallback paths - Windows included
       const tryPaths = [
         path.join(os.homedir(), '.local', 'bin', 'hermes'),
-        '/usr/local/bin/hermes',
-        '/usr/bin/hermes',
+        path.join(os.homedir(), '.hermes', 'bin', 'hermes'),
+        ...process.platform === 'win32' ? [] : [
+          '/usr/local/bin/hermes',
+          '/usr/bin/hermes',
+        ],
       ];
       for (const candidate of tryPaths) {
         try {
@@ -109,6 +152,16 @@ function resolveHermesBinary(configuredPath: string): string {
           // skip unreadable candidate
         }
       }
+    }
+  }
+
+  // If configured path doesn't exist or isn't a hermes installation, try to find it in a venv
+  if (hermesPath !== 'hermes' && (!fs.existsSync(hermesPath) || !isHermesInstallDir(path.dirname(hermesPath)))) {
+    const parentPath = path.dirname(hermesPath);
+    const foundInVenv = findHermesInVenv(parentPath);
+    if (foundInVenv) {
+      hermesPath = foundInVenv;
+      outputChannel.appendLine(`[hermes] found in .venv: ${hermesPath}`);
     }
   }
 
@@ -203,10 +256,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     outputChannel.appendLine('[security] Ignoring workspace-scoped hermes.path override');
   }
 
-  let hermesPath = configuredHermes.value;
+  // Check HERMES environment variable first (if set)
+  const hermesEnv = process.env.HERMES;
+  let hermesPath = hermesEnv ?? configuredHermes.value;
 
   outputChannel.appendLine(`[hermes] homedir: ${os.homedir()}`);
   outputChannel.appendLine(`[hermes] platform: ${process.platform}`);
+  outputChannel.appendLine(`[hermes] HERMES env: ${hermesEnv ?? '(not set)'}`);
   try {
     hermesPath = resolveHermesBinary(hermesPath);
     outputChannel.appendLine(`[hermes] binary: ${hermesPath}`);
@@ -216,6 +272,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const hermesConfig = vscode.workspace.getConfiguration('hermes');
   const debugLogs = hermesConfig.get<boolean>('debugLogs', false);
+
+  // Check if hermes binary is executable
+  let isExecutable = true;
+  if (hermesPath !== 'hermes') {
+    if (process.platform === 'win32') {
+      // On Windows, `test` is a shell built-in — execFileSync can't run it.
+      // Just verify the file exists; Windows doesn't have a chmod-style executable bit.
+      isExecutable = fs.existsSync(hermesPath);
+    } else {
+      try {
+        // `test -x` exits 0 if executable, non-zero otherwise — no stdout output.
+        execFileSync('test', ['-x', hermesPath], { timeout: 5000, encoding: 'utf8' });
+        isExecutable = true; // reaching here means exit code 0 = executable
+      } catch {
+        isExecutable = false;
+      }
+    }
+  }
+  
+  if (!isExecutable && hermesPath !== 'hermes') {
+    outputChannel.appendLine(`[security] hermes binary is not executable: ${hermesPath}`);
+    vscode.window.showErrorMessage(`Hermes binary is not executable: ${hermesPath}`);
+    return;
+  }
 
   client = new AcpClient(
     hermesPath,

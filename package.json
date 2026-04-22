@@ -1,9 +1,9 @@
 {
-  "name": "hermes-ai-agent",
-  "displayName": "Hermes AI Agent",
+  "name": "hermes-local-ai-agent",
+  "displayName": "Hermes Local AI Agent",
   "description": "VS Code sidebar for the Hermes AI agent. Streams chat, runs tools, manages sessions. Multi-model (Claude, Codex). Communicates over ACP.",
   "version": "3.0.0",
-  "publisher": "joaompfp",
+  "publisher": "hermes-local-ai",
   "author": "joao",
   "license": "MIT",
   "keywords": [
@@ -24,14 +24,14 @@
     "streaming",
     "remote ssh"
   ],
-  "homepage": "https://github.com/joaompfp/hermes-vscode",
+  "homepage": "https://github.com/hermes-local-ai/hermes-vscode",
   "bugs": {
-    "url": "https://github.com/joaompfp/hermes-vscode/issues"
+    "url": "https://github.com/hermes-local-ai/hermes-vscode/issues"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/joaompfp/hermes-vscode"
-  },
+    "repository": {
+      "type": "git",
+      "url": "https://github.com/hermes-local-ai/hermes-vscode"
+    },
   "icon": "resources/hermes-logo-128.png",
   "galleryBanner": {
     "color": "#1f1f1f",

@@ -356,6 +356,67 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       this.log(`[ui] skills: [${this.selectedSkills.join(', ')}]`);
       this.post({ type: 'statusBar', selectedSkills: this.selectedSkills });
+
+    } else if (msg.type === 'llamaRequest' && msg.text) {
+      // Custom llama.cpp model — send HTTP request directly to llama.cpp
+      const llamaUrl = 'http://127.0.0.1/v1/';
+      this.log(`[llama] sending HTTP request to ${llamaUrl}`);
+      return this.handleLlamaRequest(msg.text);
+    }
+
+    // Default case to satisfy TypeScript switch statement
+    this.log(`[ui] unknown message type: ${msg.type}`);
+  }
+
+  /**
+   * Send a message directly to llama.cpp HTTP endpoint and return the response.
+   */
+  private async handleLlamaRequest(text: string): Promise<void> {
+    const llamaUrl = 'http://127.0.0.1/v1/';
+    const messages = [{ role: 'user', content: text }];
+
+    try {
+      const response = await fetch(llamaUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages,
+          model: this.initialModel,
+          temperature: 0.7,
+          top_p: 1,
+          max_tokens: 2048,
+          stop: ['<|eot_id|>', '<|eom_id|>'],
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        this.log(`[llama] request failed: ${response.status} ${errorText}`);
+        this.post({ type: 'error', text: `llama.cpp error: ${response.status} ${errorText}` });
+        return;
+      }
+
+      const data = await response.json();
+      const choices = (data as { choices?: Array<{ message?: { content?: string } }> }).choices;
+      if (!choices || choices.length === 0) {
+        this.post({ type: 'error', text: 'No response from llama.cpp' });
+        return;
+      }
+      const message = (choices as Array<{ message?: { content?: string } }>)?.[0]?.message;
+      if (!message?.content) {
+        this.post({ type: 'error', text: 'No response from llama.cpp' });
+        return;
+      }
+      const responseText = message.content;
+      this.log(`[llama] response: ${responseText.slice(0, 100)}...`);
+      this.post({ type: 'append', text: responseText });
+      this.post({ type: 'done' });
+    } catch (error) {
+      const msg = String(error);
+      this.log(`[llama] request error: ${msg}`);
+      this.post({ type: 'error', text: `Error: ${msg}` });
     }
   }
 
