@@ -5,7 +5,7 @@
 
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import type { ToWebview, FromWebview, TodoItem } from '../types';
+import type { ToWebview, FromWebview, TodoItem, CompactSession, SaveSession } from '../types';
 import { createInitialState } from './state';
 import {
   renderMarkdown, appendDiv, appendMessage, showWaiting,
@@ -16,6 +16,29 @@ import {
   closeAllDropdowns, buildSessionPicker, setupSessionPickerHandlers,
   buildSkillsMenu, setupSkillsHandlers, updateStatusBar,
 } from './menus';
+import type { SessionManagerExport, SessionStoreExport } from '../chatPanelExport';
+import type { ChatPanelProvider } from '../chatPanel';
+
+// These are accessed through the provider instance
+let sessionMgr: SessionManagerExport;
+let store: SessionStoreExport;
+
+// Injected by the provider after resolveWebviewView
+export function setSessionManager(sm: SessionManagerExport) {
+  sessionMgr = sm;
+}
+
+export function setSessionStore(s: SessionStoreExport) {
+  store = s;
+}
+
+export function getSessionManager(): SessionManagerExport {
+  return sessionMgr;
+}
+
+export function getSessionStore(): SessionStoreExport {
+  return store;
+}
 
 declare function acquireVsCodeApi(): { postMessage(msg: FromWebview): void };
 const vscode = acquireVsCodeApi();
@@ -23,6 +46,13 @@ marked.setOptions({ breaks: true, gfm: true });
 
 // ── State ────────────────────────────────────────────
 const S = createInitialState();
+
+// ── Session menu UI elements ──────────────────────────────
+const sessionMenuBtn = document.getElementById('session-menu-btn') as HTMLButtonElement;
+const sessionMenu = document.getElementById('session-menu') as HTMLElement;
+const sessionMenuClose = document.getElementById('session-menu-close') as HTMLButtonElement;
+const sessionMenuSearch = document.getElementById('session-menu-search') as HTMLInputElement;
+const sessionMenuList = document.getElementById('session-menu-list') as HTMLElement;
 
 // ── DOM refs ─────────────────────────────────────────
 const messagesEl       = document.getElementById('messages')!;
@@ -360,6 +390,215 @@ document.addEventListener('click', closeFn);
 window.addEventListener('resize', () => requestAnimationFrame(syncComposerHeight));
 requestAnimationFrame(syncComposerHeight);
 
+// ── Escape helpers ───────────────────────────────────
+function escapeHtml(value: string | undefined): string {
+  const map: Record<string, string> = { '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' };
+  return (value || '').replace(/[&<>"']/g, c => map[c] || c);
+}
+
+function escapeAttr(value: string | undefined): string {
+  return (value || '').replace(/"/g, '"').replace(/</g, '<').replace(/>/g, '>');
+}
+
+function renderSessionMenu(searchQuery = ''): void {
+  // Guard: store may not be initialized yet (before provider sets it up)
+  if (!store) return;
+  if (!sessionMenuList) return;
+
+  const sessions = store.allSessionsReversed();
+  const activeSessionId = store.activeId;
+
+  // Filter by search query
+  let filtered = store.allSessionsReversed();
+  if (searchQuery.trim()) {
+    const query = searchQuery.toLowerCase();
+    filtered = filtered.filter((s: any) => s.title.toLowerCase().includes(query));
+  }
+
+  // Build menu items
+  const itemsHtml = filtered.map((session: any) => {
+    const isActive = session.id === activeSessionId;
+    const time = formatSessionTime(session.updatedAt);
+    return `
+      <div class="session-menu-item ${isActive ? 'active' : ''}" data-session-id="${escapeAttr(session.id)}">
+        <div class="item-title">${escapeHtml(session.title)}</div>
+        <div class="item-meta">${session.messageCount} messages</div>
+        <div class="item-time">${time}</div>
+        <div class="session-menu-actions">
+          <button class="session-menu-action-btn" title="Compact" data-action="compact" data-session-id="${escapeAttr(session.id)}">✂</button>
+          <button class="session-menu-action-btn" title="Save" data-action="save" data-session-id="${escapeAttr(session.id)}">💾</button>
+          ${!isActive ? `<button class="session-menu-action-btn delete" title="Delete" data-action="delete" data-session-id="${escapeAttr(session.id)}">×</button>` : ''}
+          <button class="session-menu-action-btn add-btn" title="Chat with this session" data-action="chat" data-session-id="${escapeAttr(session.id)}">💬</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Footer hint
+  const footerHtml = filtered.length > 0
+    ? `<div class="session-menu-footer" data-action="new"><span>+ New session</span> <span class="key-hint">Ctrl+L</span></div>`
+    : `<div class="session-menu-footer" data-action="new"><span>+ New session</span> <span class="key-hint">Ctrl+L</span></div>`;
+
+  sessionMenuList.innerHTML = itemsHtml + footerHtml;
+
+  // Add click handlers
+  sessionMenuList.querySelectorAll('.session-menu-item').forEach(item => {
+    item.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const sessionId = item.getAttribute('data-session-id');
+      if (sessionId) {
+        switchSession(sessionId);
+      }
+    });
+  });
+
+  sessionMenuList.querySelectorAll('.session-menu-action-btn').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      const action = btn.getAttribute('data-action');
+      const sessionId = btn.getAttribute('data-session-id');
+      if (action && sessionId) {
+        handleSessionAction(action, sessionId);
+      }
+    });
+  });
+
+  sessionMenuList.querySelectorAll('.session-menu-footer').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const action = btn.getAttribute('data-action');
+      if (action) {
+        handleSessionAction(action, null);
+      }
+    });
+  });
+
+  // Show menu
+  if (sessionMenu) {
+    sessionMenu.style.display = 'block';
+  }
+  S.showSessionMenu = true;
+}
+
+function switchSession(sessionId: string): void {
+  store.activeId = sessionId;
+  store.switchTo(sessionId);
+  renderSessionMenu();
+}
+
+function handleSessionAction(action: string, sessionId: string | null): void {
+  switch (action) {
+    case 'newSession':
+      // Log that we're requesting a new session
+      console.log('[webview] newSession requested');
+      // Send message to extension to create new session
+      vscode.postMessage({ type: 'newSession' });
+      // Show menu again so user can see new session
+      S.showSessionMenu = false;
+      renderSessionMenu();
+      break;
+
+    case 'compact':
+      if (sessionId) {
+        vscode.postMessage({ type: 'compactSession', sessionId });
+      }
+      S.showSessionMenu = false;
+      renderSessionMenu();
+      break;
+
+    case 'save':
+      if (sessionId) {
+        vscode.postMessage({ type: 'saveSession', sessionId });
+      }
+      S.showSessionMenu = false;
+      renderSessionMenu();
+      break;
+
+    case 'delete':
+      if (sessionId) {
+        vscode.postMessage({ type: 'deleteSession', sessionId });
+        S.showSessionMenu = false;
+        renderSessionMenu();
+      }
+      break;
+
+    case 'chat':
+      if (sessionId) {
+        store.switchTo(sessionId);
+        S.showSessionMenu = false;
+        renderSessionMenu();
+      }
+      break;
+  }
+}
+
+function formatSessionTime(timestamp: number | undefined): string {
+  const date = new Date(timestamp || Date.now());
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
+// Event delegation for session menu controls
+// Attach single listener to document, check target when event bubbles up
+document.addEventListener('click', (e) => {
+  const target = e.target as HTMLElement;
+  
+// New session button (plus icon) - creates a new session
+if (target.id === 'new-session-btn' || target.closest('#new-session-btn')) {
+  e.stopPropagation();
+  console.log('[webview] [+] New session button clicked, creating new session');
+  S.showSessionMenu = false;
+  // Send the create session message
+  vscode.postMessage({ type: 'newSession' });
+  // Re-render to show the new session
+  renderSessionMenu();
+}
+  
+  // Session menu toggle button
+  if (target.id === 'session-menu-btn' || target.closest('#session-menu-btn')) {
+    e.stopPropagation();
+    console.log('[webview] ⚙️ Session menu toggle button clicked, opening session menu');
+    S.showSessionMenu = true;
+    renderSessionMenu();
+  }
+  
+  // Session menu close button
+  if (target.id === 'session-menu-close' || target.closest('#session-menu-close')) {
+    e.stopPropagation();
+    console.log('[webview] ✕ Session menu close button clicked');
+    S.showSessionMenu = false;
+    renderSessionMenu();
+  }
+  
+  // Click outside session menu to close it
+  if (S.showSessionMenu && target.closest('#session-menu')) return;
+  if (target.id === 'session-menu') {
+    e.stopPropagation();
+    console.log('[webview] 🖱️ Clicked outside session menu, closing');
+    S.showSessionMenu = false;
+    renderSessionMenu();
+  }
+}, true);
+
+// Event delegation for session menu search
+document.addEventListener('input', (e) => {
+  const target = e.target as HTMLElement;
+  if (target.id === 'session-menu-search' || target.closest('#session-menu-search')) {
+    e.stopPropagation();
+    console.log('[webview] 🔍 Session menu search input:', (target as HTMLInputElement).value);
+    renderSessionMenu((target as HTMLInputElement).value);
+  }
+}, true);
+
 // ── Message handler ──────────────────────────────────
 window.addEventListener('message', (e: MessageEvent) => {
   const msg = e.data as ToWebview;
@@ -522,10 +761,21 @@ window.addEventListener('message', (e: MessageEvent) => {
       if (msg.sessions && msg.activeSessionId !== undefined) {
         buildSessionPicker(sessionPicker, msg.sessions, msg.activeSessionId, statusSessionEl, S);
       }
+      console.log('[webview] sessionList updated, sessions:', msg.sessions?.length);
       break;
 
     case 'loadHistory':
+      console.log('[webview] loadHistory called, history length:', (msg.history ?? []).length);
       loadHistory(messagesEl, msg.history ?? [], msg.switched ?? false);
+      break;
+
+    case 'newSession':
+      console.log('[webview] newSession requested, activeId:', store.activeId);
+      console.log('[webview] calling createSession...');
+      vscode.postMessage({ type: 'newSession' });
+      console.log('[webview] newSession message sent');
+      S.showSessionMenu = false;
+      renderSessionMenu();
       break;
   }
 });

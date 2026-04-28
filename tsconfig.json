@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "sourceMap": true
   },
-  "exclude": ["node_modules", "dist", "media", "old", "src/webview"]
+"exclude": ["node_modules", "dist", "media", "old", "src/webview", "vendor"]
 }

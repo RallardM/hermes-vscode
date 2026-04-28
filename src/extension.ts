@@ -2,10 +2,11 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { AcpClient } from './acpClient';
 import { PermissionRequestHandler, SessionManager } from './sessionManager';
 import { ChatPanelProvider } from './chatPanel';
+import type { WebviewPanelSerializer } from 'vscode';
 
 const DEFAULT_SONNET_MODEL = 'claude-sonnet-4-6';
 const APPROVED_BINARIES_KEY = 'hermes.approvedBinaries';
@@ -246,6 +247,45 @@ function optionIdByIntent(params: unknown, intent: 'allow' | 'deny'): string | n
 
 let client: AcpClient | null = null;
 let outputChannel: vscode.OutputChannel;
+let hermesProcess: ReturnType<typeof spawn> | null = null;
+
+// Function to start the ACP server
+async function startAcpServer(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    outputChannel.appendLine('[hermes] Starting ACP server...');
+    
+    const hermesProcess = spawn('hermes', ['acp'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+      env: {
+        ...process.env,
+        HERMES_LOG_LEVEL: 'INFO',
+      },
+    });
+    
+    hermesProcess.on('error', (error) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      outputChannel.appendLine(`[hermes] Failed to start ACP server: ${errorMessage}`);
+      reject(new Error(`Failed to start ACP server: ${errorMessage}`));
+    });
+    
+    hermesProcess.on('exit', (code) => {
+      if (code !== null && code !== 0) {
+        outputChannel.appendLine(`[hermes] ACP server exited with code ${code}`);
+        reject(new Error(`Failed to start ACP server: exited with code ${code}`));
+      }
+    });
+    
+    // Detach the process from the parent
+    hermesProcess.unref();
+    
+    // Wait a brief moment for the server to start
+    setTimeout(() => {
+      outputChannel.appendLine('[hermes] ACP server started');
+      resolve();
+    }, 500);
+  });
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   outputChannel = vscode.window.createOutputChannel('Hermes');
@@ -265,10 +305,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   outputChannel.appendLine(`[hermes] HERMES env: ${hermesEnv ?? '(not set)'}`);
   try {
     hermesPath = resolveHermesBinary(hermesPath);
-    outputChannel.appendLine(`[hermes] binary: ${hermesPath}`);
+  outputChannel.appendLine(`[hermes] binary: ${hermesPath}`);
   } catch (err) {
     outputChannel.appendLine(`[security] invalid Hermes binary: ${err}`);
   }
+
+  // Status bar
+  const statusItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100,
+  );
+  statusItem.text = '$(circle-outline) Hermes';
+  statusItem.command = 'hermes.openChat';
+  statusItem.show();
 
   const hermesConfig = vscode.workspace.getConfiguration('hermes');
   const debugLogs = hermesConfig.get<boolean>('debugLogs', false);
@@ -302,6 +351,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     debugLogs ? { HERMES_LOG_LEVEL: 'DEBUG' } : {},
     debugLogs,
   );
+
+  // Start the ACP client to connect to Hermes immediately
+  await client.start();
 
   if (debugLogs) {
     outputChannel.show(true);
@@ -345,6 +397,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const panel = new ChatPanelProvider(
     context.extensionUri,
     session,
+    client,
     hermesModel,
     hermesVersion,
     context,
@@ -372,15 +425,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // Status bar
-  const statusItem = vscode.window.createStatusBarItem(
-    vscode.StatusBarAlignment.Right,
-    100,
+  // Webview message handlers
+  const scriptUri = vscode.Uri.parse('vscode-resource:' + context.extension.extensionUri.fsPath + '/src/webview/index.html');
+
+  let lastPythonDoc: vscode.TextDocument | null = null;
+  
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(editor => {
+      if (editor && editor.document.languageId === 'python') {
+        if (editor.document !== lastPythonDoc) {
+          lastPythonDoc = editor.document;
+          panel?.post({ type: 'switchSession', sessionId: 'python-doc-' + editor.document.uri.toString() });
+        }
+      }
+    }),
+    vscode.window.onDidChangeVisibleTextEditors(() => {
+      // Refresh session list when editor visibility changes
+      panel?.post({ type: 'sessionList' });
+    }),
   );
-  statusItem.text = '$(circle-outline) Hermes';
-  statusItem.command = 'hermes.openChat';
-  statusItem.show();
-  context.subscriptions.push(statusItem);
 
   function setStatus(state: 'connected' | 'disconnected' | 'connecting'): void {
     const icons: Record<string, string> = {
@@ -389,7 +452,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       connecting: '$(loading~spin)',
     };
     statusItem.text = `${icons[state]} Hermes`;
-    panel.post({ type: 'status', status: state });
+    panel?.post({ type: 'status', status: state });
   }
 
   async function ensureConnected(): Promise<void> {
@@ -430,12 +493,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
-  // Auto-connect
-  if (vscode.workspace.isTrusted) {
-    void ensureConnected();
-  } else {
-    setStatus('disconnected');
-  }
+  // Hermes is started via client.start() above
 }
 
 export function deactivate(): void {

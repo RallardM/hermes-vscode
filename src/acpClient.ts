@@ -14,6 +14,7 @@
 
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import { ChatSession } from './types';
 
 export type IncomingRequestHandler = (
   method: string,
@@ -39,6 +40,8 @@ export class AcpClient extends EventEmitter {
     private hermesPath: string,
     private readonly envOverrides: NodeJS.ProcessEnv = {},
     private readonly debugLogging = false,
+    private readonly _acpClient?: AcpClient,
+    private readonly env: NodeJS.ProcessEnv = process.env,
   ) {
     super();
   }
@@ -216,5 +219,59 @@ export class AcpClient extends EventEmitter {
     } else {
       this.replyError(id, -32601, `No handler for ${method}`);
     }
+  }
+
+  /**
+   * Create a new session in Hermes.
+   */
+  async createSession(sessionId: string): Promise<void> {
+    await this.call('session/create', { session_id: sessionId });
+  }
+
+  /**
+   * Delete a session in Hermes.
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.call('session/delete', { session_id: sessionId });
+  }
+
+  /**
+   * List all sessions in Hermes.
+   */
+  async listSessions(): Promise<ChatSession[]> {
+    const result = await this.call('session/list', {});
+    
+    // Handle unexpected response types gracefully (e.g., null, undefined, empty object)
+    if (!Array.isArray(result)) {
+      console.warn('[acp] session/list returned non-array, returning empty list');
+      return [];
+    }
+    
+    return result.map((r: Record<string, unknown>) => ({
+      id: String(r.session_id ?? r.id),
+      title: String(r.title ?? 'New Session'),
+      createdAt: Number(r.created_at ?? Date.now()),
+      updatedAt: Number(r.updated_at ?? r.updated_at ?? Date.now()),
+      messages: Array.isArray(r.messages) ? r.messages : [],
+      acpSessionId: String(r.acp_session_id ?? undefined),
+      apiTimeMs: Number(r.api_time_ms ?? 0),
+      toolTimeMs: Number(r.tool_time_ms ?? 0),
+      peakMemoryBytes: Number(r.peak_memory_bytes ?? 0),
+      tags: Array.isArray(r.tags) ? r.tags : [],
+    }));
+  }
+
+  /**
+   * Compact a session (remove duplicate tool outputs).
+   */
+  async compactSession(sessionId: string): Promise<void> {
+    await this.call('session/compact', { session_id: sessionId });
+  }
+
+  /**
+   * Save a session (persist to Hermes).
+   */
+  async saveSession(sessionId: string): Promise<void> {
+    await this.call('session/save', { session_id: sessionId });
   }
 }

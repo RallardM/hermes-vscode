@@ -167,3 +167,21 @@ export function parseSessionInfoUpdate(update: RawUpdate): string | null {
   const title = update.title as string | undefined;
   return title?.trim() || null;
 }
+
+// ── Session commands ─────────────────────────────────
+
+export interface ACPSession {
+  id: string;
+  title: string;
+  preview: string;
+  updated_at: string;
+  message_count: number;
+}
+
+/** Hermes session command types for MCP protocol. */
+export type HermesSessionCommand =
+  | { type: 'hermes.sessions.create'; sessionId: string }
+  | { type: 'hermes.sessions.delete'; sessionId: string }
+  | { type: 'hermes.sessions.list'; sessions: ACPSession[] }
+  | { type: 'hermes.sessions.compact'; sessionId: string }
+  | { type: 'hermes.sessions.save'; sessionId: string };

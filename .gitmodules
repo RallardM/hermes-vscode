@@ -1,0 +1,12 @@
+[submodule "vendor/cline"]
+	path = vendor/cline
+	url = git@github.com:cline/cline.git
+	branch = main
+[submodule "vendor/continue"]
+	path = vendor/continue
+	url = git@github.com:continuedev/continue.git
+	branch = main
+[submodule "vendor/hermes-agent"]
+	path = vendor/hermes-agent
+	url = git@github.com:RallardM/hermes-agent.git
+	branch = main

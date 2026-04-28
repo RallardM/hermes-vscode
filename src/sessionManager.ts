@@ -25,7 +25,7 @@
  */
 
 import { AcpClient } from './acpClient';
-import type { SessionUpdateEvent, SessionUpdateHandler } from './types';
+import type { ChatSession, SessionUpdateEvent, SessionUpdateHandler } from './types';
 import {
   extractTextContent, deduplicateChunk,
   parseToolCall, parseToolCallUpdate,
@@ -33,6 +33,43 @@ import {
 } from './protocol';
 
 export type PermissionRequestHandler = (method: string, params: unknown) => Promise<unknown>;
+
+/**
+ * Tool call record for tracking in-flight operations
+ */
+interface ToolCallRecord {
+  name: string;
+  success?: boolean;
+  startTime: number;
+  lastUpdateTime: number;
+}
+
+/**
+ * Resource usage snapshot
+ */
+interface ResourceUsage {
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
+  rss: number;
+  userCpuMs: number;
+  systemCpuMs: number;
+}
+
+/**
+ * Session statistics
+ */
+interface SessionStats {
+  sessionId: string;
+  totalToolCalls: number;
+  successfulToolCalls: number;
+  failedToolCalls: number;
+  sessionStartTime: number;
+  apiTimeMs: number;
+  toolTimeMs: number;
+  resources: ResourceUsage;
+  peakMemoryBytes: number;
+}
 
 export class SessionManager {
   private sessionId: string | null = null;
@@ -290,5 +327,179 @@ export class SessionManager {
     }
 
     this.updateHandler(event);
+  }
+
+  // Session Statistics — per-session performance tracking
+  // Mirrors Cline's Session class but adapted for Hermes architecture.
+  
+  private toolCalls: ToolCallRecord[] = [];
+  private apiTimeMs: number = 0;
+  private toolTimeMs: number = 0;
+  private inFlightToolCalls: Map<string, ToolCallRecord> = new Map();
+  private currentApiCallStart: number | null = null;
+  private peakMemoryBytes: number = 0;
+  private sessionStartTime: number = 0;
+  private initialCpuUsage: NodeJS.CpuUsage = { user: 0, system: 0 };
+  
+  /**
+   * Get session statistics
+   */
+  getStats(): SessionStats {
+    // Finalize any in-flight tool calls
+    for (const [callId, record] of this.inFlightToolCalls) {
+      const duration = record.lastUpdateTime - record.startTime;
+      this.toolTimeMs += duration;
+      this.toolCalls.push({
+        name: record.name,
+        success: record.success,
+        startTime: record.startTime,
+        lastUpdateTime: record.lastUpdateTime,
+      });
+      this.inFlightToolCalls.delete(callId);
+    }
+    
+    const allToolCalls = this.toolCalls;
+    const successful = allToolCalls.filter((t) => t.success === true).length;
+    const failed = allToolCalls.filter((t) => t.success === false).length;
+    
+    // Update peak memory
+    const memUsage = process.memoryUsage();
+    if (memUsage.rss > this.peakMemoryBytes) {
+      this.peakMemoryBytes = memUsage.rss;
+    }
+    
+    // Calculate CPU usage delta
+    const cpuUsage = process.cpuUsage(this.initialCpuUsage);
+    
+    return {
+      sessionId: this.sessionId ?? 'unknown',
+      totalToolCalls: allToolCalls.length,
+      successfulToolCalls: successful,
+      failedToolCalls: failed,
+      sessionStartTime: this.sessionStartTime,
+      apiTimeMs: this.apiTimeMs,
+      toolTimeMs: this.toolTimeMs,
+      resources: {
+        heapUsed: memUsage.heapUsed,
+        heapTotal: memUsage.heapTotal,
+        external: memUsage.external,
+        rss: memUsage.rss,
+        userCpuMs: cpuUsage.user / 1000,
+        systemCpuMs: cpuUsage.system / 1000,
+      },
+      peakMemoryBytes: this.peakMemoryBytes,
+    };
+  }
+  
+  /**
+   * Start tracking a new session
+   */
+  startSession(): void {
+    this.sessionStartTime = Date.now();
+    this.apiTimeMs = 0;
+    this.toolTimeMs = 0;
+    this.toolCalls = [];
+    this.inFlightToolCalls.clear();
+    this.peakMemoryBytes = 0;
+    this.initialCpuUsage = process.cpuUsage();
+  }
+  
+  /**
+   * Start timing an API call
+   */
+  startApiCall(): void {
+    this.currentApiCallStart = Date.now();
+  }
+  
+  /**
+   * End timing an API call
+   */
+  endApiCall(): void {
+    if (this.currentApiCallStart !== null) {
+      this.apiTimeMs += Date.now() - this.currentApiCallStart;
+      this.currentApiCallStart = null;
+    }
+  }
+  
+  /**
+   * Update a tool call's status
+   */
+  updateToolCall(callId: string, toolName: string, success?: boolean): void {
+    const now = Date.now();
+    const existing = this.inFlightToolCalls.get(callId);
+    
+    if (existing) {
+      existing.lastUpdateTime = now;
+      if (success !== undefined) {
+        existing.success = success;
+      }
+      return;
+    }
+    
+    this.inFlightToolCalls.set(callId, {
+      name: toolName,
+      startTime: now,
+      lastUpdateTime: now,
+    });
+  }
+  
+  /**
+   * Finalize the current session
+   */
+  finalizeSession(): void {
+    // Update peak memory one last time
+    const memUsage = process.memoryUsage();
+    if (memUsage.rss > this.peakMemoryBytes) {
+      this.peakMemoryBytes = memUsage.rss;
+    }
+  }
+  
+  /**
+   * Get wall time for session
+   */
+  getWallTimeMs(): number {
+    return Date.now() - this.sessionStartTime;
+  }
+  
+  /**
+   * Get agent active time (API + tool time)
+   */
+  getAgentActiveTimeMs(): number {
+    return this.apiTimeMs + this.toolTimeMs;
+  }
+  
+  /**
+   * Get success rate for tool calls
+   */
+  getSuccessRate(): number {
+    const stats = this.getStats();
+    if (stats.totalToolCalls === 0) return 0;
+    return (stats.successfulToolCalls / stats.totalToolCalls) * 100;
+  }
+  
+  /**
+   * Update session in SessionStore with stats
+   */
+  updateSession(session: ChatSession): void {
+    session.apiTimeMs = this.apiTimeMs;
+    session.toolTimeMs = this.toolTimeMs;
+    session.peakMemoryBytes = this.peakMemoryBytes;
+    session.updatedAt = Date.now();
+  }
+
+  /**
+   * Compact session — remove duplicate tool outputs
+   */
+  async compactSession(): Promise<void> {
+    if (!this.sessionId) return;
+    await this.client.compactSession(this.sessionId);
+  }
+
+  /**
+   * Save session — persist to Hermes
+   */
+  async saveSession(): Promise<void> {
+    if (!this.sessionId) return;
+    await this.client.saveSession(this.sessionId);
   }
 }

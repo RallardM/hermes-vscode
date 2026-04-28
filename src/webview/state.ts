@@ -28,6 +28,19 @@ export interface WebviewState {
   // Skills
   selectedSkillNames: Set<string>;
   skillGroupsData: { category: string; skills: { name: string; description: string }[] }[];
+
+  // Session management
+  sessionList: Array<{
+    id: string;
+    title: string;
+    messageCount: number;
+    lastMessageAt: number;
+  }>;
+
+  // Session menu UI state
+  showSessionMenu: boolean;
+  showNewSessionButton: boolean;
+  sessionMenuWidth: number;
 }
 
 export function createInitialState(): WebviewState {
@@ -47,5 +60,9 @@ export function createInitialState(): WebviewState {
     prevQueueCount: 0,
     selectedSkillNames: new Set(),
     skillGroupsData: [],
+    sessionList: [],
+    showSessionMenu: false,
+    showNewSessionButton: false,
+    sessionMenuWidth: 280,
   };
 }

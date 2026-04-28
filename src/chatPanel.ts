@@ -8,11 +8,20 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { SessionManager } from './sessionManager';
+import { AcpClient } from './acpClient';
 import { SessionStore } from './sessionStore';
 import { loadHermesModelGroups, ModelMenuGroup } from './modelCatalog';
 import { loadHermesSkills, SkillGroup } from './skillCatalog';
 import { buildChatHtml, escapeHtml } from './htmlTemplate';
-import type { StoredMessage, ToWebview, FromWebview } from './types';
+import type { StoredMessage, ToWebview, FromWebview, ChatSession } from './types';
+
+// Session picker state
+interface SessionPickerState {
+  visible: boolean;
+  sessions: Array<{ id: string; title: string; messageCount: number; createdAt: number }>;
+  activeId: string;
+  searchTerm: string;
+}
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'hermes.chatView';
@@ -31,10 +40,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private attachedFiles: { name: string; path: string }[] = [];
   private toolCallLocations = new Map<string, { kind: string; paths: string[] }>();
   private readonly mediaRoot: string;
+  private sessionPickerState: SessionPickerState;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly session: SessionManager,
+    private readonly acpClient: AcpClient,
     private readonly initialModel: string = '—',
     private readonly hermesVersion: string = '',
     private readonly context: vscode.ExtensionContext,
@@ -42,7 +53,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   ) {
     this.mediaRoot = path.join(this.context.globalStorageUri.fsPath, 'media');
     fs.mkdirSync(this.mediaRoot, { recursive: true });
-    this.store = new SessionStore(context);
+    this.store = new SessionStore(context, session, acpClient);
+    this.sessionPickerState = {
+      visible: false,
+      sessions: this.store.allSessionsReversed().map(s => ({
+        id: s.id,
+        title: s.title,
+        messageCount: s.messages.length,
+        createdAt: s.createdAt,
+      })),
+      activeId: this.store.activeId,
+      searchTerm: '',
+    };
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -73,6 +95,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     setTimeout(() => {
       this.post({ type: 'statusBar', model: this.initialModel, version: this.hermesVersion, skillGroups: this.skillGroups });
       this.broadcastSessions(this.store);
+      this.broadcastSessionPicker(this.store);
       // Restore last session's history into the view
       if (active && active.messages.length > 0) {
         this.post({ type: 'loadHistory', history: active.messages, activeSessionId: this.store.activeId });
@@ -111,7 +134,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           }
         } else if (event.toolTitle) {
           const icon = event.toolStatus === 'done' || event.toolStatus === 'completed' ? '✓' : event.toolStatus === 'error' ? '✗' : '⋯';
-          this.lastTurnTools.push({ role: 'tool', text: `${icon} ${event.toolTitle}${event.toolDetail ? ': ' + event.toolDetail : ''}` });
+          this.lastTurnTools.push({ role: 'tool' as const, text: `${icon} ${event.toolTitle}${event.toolDetail ? ': ' + event.toolDetail : ''}`, timestamp: Date.now(), sessionId: this.store.activeId });
           // Store locations for file-open on completion
           if (event.toolCallId && event.toolLocations?.length && event.toolKind) {
             this.toolCallLocations.set(event.toolCallId, {
@@ -164,6 +187,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         });
       }
     });
+
+    // Session picker actions (toggled via webview, data sent via state)
+    webviewView.webview.onDidReceiveMessage((msg: FromWebview) => {
+      if (msg.type === 'toggleSessionPicker') {
+        this.toggleSessionPicker();
+      } else if (msg.type === 'deleteSession' && msg.sessionId) {
+        this.deleteSession(msg.sessionId);
+      }
+    });
   }
 
   post(msg: ToWebview): void {
@@ -171,7 +203,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private saveTurnToSession(): void {
-    this.store.addTurnMessages(this.lastTurnTools, this.lastTurnText);
+    // Wrap messages to ensure required properties are set
+    const messagesWithProps = this.lastTurnTools.map(m => ({
+      ...m,
+      timestamp: m.timestamp || Date.now(),
+      sessionId: m.sessionId || this.store.activeId,
+    }));
+    this.store.addTurnMessages(messagesWithProps, this.lastTurnText);
     this.lastTurnText = '';
     this.lastTurnTools = [];
   }
@@ -325,6 +363,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     } else if (msg.type === 'clearAttachments') {
       this.attachedFiles = [];
 
+    } else if (msg.type === 'compactSession') {
+      this.log(`[ui] compact active session`);
+      this.session.compactSession();
+      this.post({ type: 'clear' });
+      this.broadcastSessions(this.store);
+
+    } else if (msg.type === 'saveSession') {
+      this.log(`[ui] save active session`);
+      this.session.saveSession();
+      this.post({ type: 'clear' });
+      this.broadcastSessions(this.store);
+
+    } else if (msg.type === 'deleteSession' && msg.sessionId) {
+      this.log(`[ui] delete session ${msg.sessionId}`);
+      if (this.store.deleteSession(msg.sessionId)) {
+        this.broadcastSessions(this.store);
+      }
+
     } else if (msg.type === 'renameSession' && msg.sessionId) {
       const s = this.store.allSessions().find(s => s.id === msg.sessionId);
       if (!s) return;
@@ -340,11 +396,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.post({ type: 'statusBar', sessionTitle: newName.trim().slice(0, 60) });
           void this.runPrompt(`/title ${newName.trim().slice(0, 60)}`);
         }
-      }
-
-    } else if (msg.type === 'deleteSession' && msg.sessionId) {
-      if (this.store.deleteSession(msg.sessionId)) {
-        this.broadcastSessions(this.store);
       }
 
     } else if (msg.type === 'toggleSkill' && msg.text) {
@@ -567,10 +618,49 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private broadcastSessions(_store: SessionStore): void {
     this.post({
       type: 'sessionList',
-      sessions: _store.allSessionsReversed(),
-      activeSessionId: _store.activeId,
+      sessions: _store.allSessionsReversed().map(s => ({
+        id: s.id,
+        title: s.title,
+        messageCount: s.messages.length,
+        createdAt: s.createdAt,
+      })),
+      activeId: _store.activeId,
       sessionTitle: _store.active()?.title,
     });
+  }
+
+  /** Broadcast session picker state to webview */
+  private broadcastSessionPicker(_store: SessionStore): void {
+    const sessions = _store.allSessionsReversed().map(s => ({
+      id: s.id,
+      title: s.title,
+      messageCount: s.messages.length,
+      createdAt: s.createdAt,
+    }));
+    this.post({
+      type: 'sessionPicker',
+      sessions,
+      activeId: _store.activeId,
+      searchTerm: this.sessionPickerState.searchTerm,
+    });
+  }
+
+  /** Toggle session picker visibility */
+  private toggleSessionPicker(): void {
+    this.sessionPickerState.visible = !this.sessionPickerState.visible;
+    this.broadcastSessionPicker(this.store);
+  }
+
+  /** Delete a session */
+  private deleteSession(sessionId: string): void {
+    if (this.store.deleteSession(sessionId)) {
+      this.broadcastSessionPicker(this.store);
+      // Switch to next session if current was deleted
+      if (sessionId === this.store.activeId && this.store.allSessions().length > 0) {
+        const next = this.store.allSessions()[0];
+        this.post({ type: 'switchSession', sessionId: next.id });
+      }
+    }
   }
 
 
@@ -581,5 +671,70 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       initialModel: this.initialModel,
       modelGroups: this.modelGroups,
     });
+  }
+
+  /** Render session picker UI (called from webview via postMessage) */
+  private renderSessionPicker(
+    sessionId: string,
+    sessions: Array<{ id: string; title: string; messageCount: number; createdAt: number }>,
+    webview: vscode.Webview,
+  ): string {
+    // Build session list items
+    let itemsHtml = '';
+    [...sessions].reverse().forEach(s => {
+      const activeClass = s.id === sessionId ? ' active' : '';
+      const title = s.title.length > 20 ? s.title.slice(0, 17) + '...' : s.title;
+      itemsHtml += `
+        <div class="session-item${activeClass}" data-id="${s.id}">
+          <span class="session-title">${escapeHtml(title)}</span>
+          <span class="session-meta">${s.messageCount} msgs • ${new Date(s.createdAt).toLocaleDateString()}</span>
+        </div>
+      `;
+    });
+
+    // Build delete buttons
+    let deletesHtml = '';
+    sessions.forEach(s => {
+      const isCurrent = s.id === sessionId;
+      deletesHtml += `
+        <div class="session-delete-item${isCurrent ? ' current' : ''}" data-id="${s.id}">
+          <span class="delete-icon">🗑️</span>
+          <span class="delete-title">${escapeHtml(s.title)}</span>
+        </div>
+      `;
+    });
+
+    return `
+      <div class="session-picker">
+        <div class="session-picker-header">
+          <span>Sessions</span>
+          <button class="session-close" data-action="close">✕</button>
+        </div>
+        <div class="session-list">
+          ${itemsHtml}
+        </div>
+        <div class="session-deletes">
+          ${deletesHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  /** Open file picker and show session picker */
+  private async showSessionPicker(): Promise<void> {
+    const uris = await vscode.window.showOpenDialog({
+      openLabel: 'Open',
+      canSelectFiles: false,
+      canSelectFolders: false,
+      canSelectMany: false,
+    });
+
+    if (uris) {
+      for (const uri of uris) {
+        this.setAttachedFile(uri.fsPath);
+      }
+    }
+
+    this.toggleSessionPicker();
   }
 }
