@@ -47,12 +47,8 @@ marked.setOptions({ breaks: true, gfm: true });
 // ── State ────────────────────────────────────────────
 const S = createInitialState();
 
-// ── Session menu UI elements ──────────────────────────────
-const sessionMenuBtn = document.getElementById('session-menu-btn') as HTMLButtonElement;
-const sessionMenu = document.getElementById('session-menu') as HTMLElement;
-const sessionMenuClose = document.getElementById('session-menu-close') as HTMLButtonElement;
-const sessionMenuSearch = document.getElementById('session-menu-search') as HTMLInputElement;
-const sessionMenuList = document.getElementById('session-menu-list') as HTMLElement;
+// ── Session menu UI elements (replaced with inline buttons) ───────────────────
+// Session menu removed — replaced with [+][+] and compact (✂) buttons in header
 
 // ── DOM refs ─────────────────────────────────────────
 const messagesEl       = document.getElementById('messages')!;
@@ -79,6 +75,7 @@ const overflowBtn      = document.getElementById('overflow-btn') as HTMLButtonEl
 const overflowMenu     = document.getElementById('overflow-menu') as HTMLDivElement;
 const emptyState       = document.getElementById('empty-state') as HTMLDivElement;
 const sessionPicker    = document.getElementById('session-picker') as HTMLDivElement;
+const sessionMenuList  = document.getElementById('session-menu-list') as HTMLDivElement;
 const logoMark         = document.getElementById('logo-mark')!;
 const todoOverlay      = document.getElementById('todo-overlay')!;
 const skillsBtn        = document.getElementById('skills-btn') as HTMLButtonElement;
@@ -221,7 +218,17 @@ statusSessionEl.addEventListener('click', (e) => {
   e.stopPropagation(); const open = sessionPicker.style.display !== 'none';
   closeFn(); if (!open) sessionPicker.style.display = 'block';
 });
-setupSessionPickerHandlers(sessionPicker, vscode, S, closeFn);
+
+// Compact button — triggers /compact slash command
+document.getElementById('compact-btn')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  console.log('[webview] ✂ Compact button clicked, sending /compact command');
+  if (!S.isBusy) {
+    S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
+    showWaiting(messagesEl);
+  }
+  vscode.postMessage({ type: 'send', text: '/compact' });
+});
 
 // Model switcher
 modelBtnHeader.addEventListener('click', (e) => {
@@ -405,14 +412,30 @@ function renderSessionMenu(searchQuery = ''): void {
   if (!store) return;
   if (!sessionMenuList) return;
 
-  const sessions = store.allSessionsReversed();
-  const activeSessionId = store.activeId;
+  const sessions = store.allSessionsReversed() as any[];
+  const activeSessionId = store.activeId as string;
 
   // Filter by search query
-  let filtered = store.allSessionsReversed();
+  let filtered = store.allSessionsReversed() as any[];
   if (searchQuery.trim()) {
     const query = searchQuery.toLowerCase();
-    filtered = filtered.filter((s: any) => s.title.toLowerCase().includes(query));
+    console.log('[DEBUG] Filtering sessions with query:', query);
+    
+    // Log each session to debug filtering
+    const sessionList = store.allSessionsReversed() as any[];
+    sessionList.forEach((s: any) => {
+      console.log('[DEBUG] Session title:', s.title, '| lowercase:', s.title ? s.title.toLowerCase() : 'undefined');
+    });
+    
+    filtered = filtered.filter((s: any) => {
+      // Handle sessions without title
+      const sessionTitle = s.title || '';
+      const matches = sessionTitle.toLowerCase().includes(query);
+      console.log('[DEBUG] Session', sessionTitle, 'matches query', query, ':', matches);
+      return matches;
+    });
+    
+    console.log('[DEBUG] Filtered from', sessionList.length, 'to', filtered.length, 'sessions');
   }
 
   // Build menu items
@@ -442,8 +465,8 @@ function renderSessionMenu(searchQuery = ''): void {
   sessionMenuList.innerHTML = itemsHtml + footerHtml;
 
   // Add click handlers
-  sessionMenuList.querySelectorAll('.session-menu-item').forEach(item => {
-    item.addEventListener('click', (ev) => {
+  sessionMenuList.querySelectorAll('.session-menu-item').forEach((item: Element) => {
+    item.addEventListener('click', (ev: Event) => {
       ev.stopPropagation();
       const sessionId = item.getAttribute('data-session-id');
       if (sessionId) {
@@ -452,8 +475,8 @@ function renderSessionMenu(searchQuery = ''): void {
     });
   });
 
-  sessionMenuList.querySelectorAll('.session-menu-action-btn').forEach(btn => {
-    btn.addEventListener('click', (ev) => {
+  sessionMenuList.querySelectorAll('.session-menu-action-btn').forEach((btn: Element) => {
+    btn.addEventListener('click', (ev: Event) => {
       ev.stopPropagation();
       ev.preventDefault();
       const action = btn.getAttribute('data-action');
@@ -464,8 +487,8 @@ function renderSessionMenu(searchQuery = ''): void {
     });
   });
 
-  sessionMenuList.querySelectorAll('.session-menu-footer').forEach(btn => {
-    btn.addEventListener('click', (ev) => {
+  sessionMenuList.querySelectorAll('.session-menu-footer').forEach((btn: Element) => {
+    btn.addEventListener('click', (ev: Event) => {
       ev.stopPropagation();
       const action = btn.getAttribute('data-action');
       if (action) {
@@ -475,8 +498,8 @@ function renderSessionMenu(searchQuery = ''): void {
   });
 
   // Show menu
-  if (sessionMenu) {
-    sessionMenu.style.display = 'block';
+  if (sessionMenuList) {
+    sessionMenuList.style.display = 'block';
   }
   S.showSessionMenu = true;
 }
@@ -547,55 +570,31 @@ function formatSessionTime(timestamp: number | undefined): string {
   return `${diffDays}d ago`;
 }
 
-// Event delegation for session menu controls
-// Attach single listener to document, check target when event bubbles up
+// Event delegation for inline header buttons (replaced burger menu with compact button)
 document.addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
   
-// New session button (plus icon) - creates a new session
-if (target.id === 'new-session-btn' || target.closest('#new-session-btn')) {
-  e.stopPropagation();
-  console.log('[webview] [+] New session button clicked, creating new session');
-  S.showSessionMenu = false;
-  // Send the create session message
-  vscode.postMessage({ type: 'newSession' });
-  // Re-render to show the new session
-  renderSessionMenu();
-}
-  
-  // Session menu toggle button
-  if (target.id === 'session-menu-btn' || target.closest('#session-menu-btn')) {
+  // New session button (plus icon) — creates a new session
+  if (target.id === 'new-session-btn' || target.closest('#new-session-btn')) {
     e.stopPropagation();
-    console.log('[webview] ⚙️ Session menu toggle button clicked, opening session menu');
-    S.showSessionMenu = true;
-    renderSessionMenu();
-  }
-  
-  // Session menu close button
-  if (target.id === 'session-menu-close' || target.closest('#session-menu-close')) {
-    e.stopPropagation();
-    console.log('[webview] ✕ Session menu close button clicked');
+    console.log('[webview] [+] New session button clicked, creating new session');
     S.showSessionMenu = false;
+    // Send the create session message
+    vscode.postMessage({ type: 'newSession' });
+    // Re-render to show the new session
     renderSessionMenu();
+    console.log('[DEBUG] New session created, showSessionMenu:', S.showSessionMenu);
   }
   
-  // Click outside session menu to close it
-  if (S.showSessionMenu && target.closest('#session-menu')) return;
-  if (target.id === 'session-menu') {
+  // Compact button (scissors icon) — triggers /compact command
+  if (target.id === 'compact-btn' || target.closest('#compact-btn')) {
     e.stopPropagation();
-    console.log('[webview] 🖱️ Clicked outside session menu, closing');
-    S.showSessionMenu = false;
-    renderSessionMenu();
-  }
-}, true);
-
-// Event delegation for session menu search
-document.addEventListener('input', (e) => {
-  const target = e.target as HTMLElement;
-  if (target.id === 'session-menu-search' || target.closest('#session-menu-search')) {
-    e.stopPropagation();
-    console.log('[webview] 🔍 Session menu search input:', (target as HTMLInputElement).value);
-    renderSessionMenu((target as HTMLInputElement).value);
+    console.log('[webview] ✂ Compact button clicked, sending /compact command');
+    if (!S.isBusy) {
+      S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
+      showWaiting(messagesEl);
+    }
+    vscode.postMessage({ type: 'send', text: '/compact' });
   }
 }, true);
 

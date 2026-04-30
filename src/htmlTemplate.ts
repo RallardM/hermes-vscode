@@ -89,7 +89,7 @@ ${CSS_TEMPLATE}
 <body>
   <div id="header">
     <div id="header-brand">
-      <button id="session-menu-btn" title="Session menu" style="background:none;border:none;color:var(--gold);font-size:1.4em;cursor:pointer;padding:0;flex-shrink:0;">☰</button>
+      <!-- Burger menu removed - replaced with [+] [+] compact icons -->
       <span class="brand-icon">☤</span>
       <span class="brand-text">Hermes</span>
       <span class="brand-version" id="status-version"></span>
@@ -99,19 +99,11 @@ ${CSS_TEMPLATE}
     <div id="header-session">
       <button id="status-session" title="Sessions">new session</button>
       <button id="new-session-btn" title="New session" style="background:none;border:none;color:var(--gold);font-size:1.4em;cursor:pointer;padding:0;flex-shrink:0;">➕</button>
+      <button id="compact-btn" title="Compact session" style="background:none;border:none;color:var(--gold);font-size:1.4em;cursor:pointer;padding:0;flex-shrink:0;">✂</button>
       <div id="status-right">
         <div id="ctx-bar-wrap" style="display:none"><div id="ctx-bar"></div><div id="ctx-bar-fresh"></div></div>
         <span id="status-context"></span>
       </div>
-    </div>
-    <div id="session-picker" class="status-dropdown" style="display:none"></div>
-    <div id="session-menu" class="session-menu" style="display:none">
-      <div class="session-menu-header">
-        <span class="session-menu-title">Sessions</span>
-        <button id="session-menu-close" title="Close menu" style="background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:1.2em;flex-shrink:0;">×</button>
-      </div>
-      <input type="text" id="session-menu-search" class="session-menu-search" placeholder="Search sessions…"/>
-      <div id="session-menu-list" class="session-menu-list"></div>
     </div>
     <div id="model-menu" style="display:none">
       ${modelMenuHtml}
@@ -331,92 +323,20 @@ const CSS_TEMPLATE = /* css */ `
       cursor: pointer; font-size: 1.2em; flex-shrink: 0; padding: 0;
     }
     .session-menu-close:hover { color: var(--vscode-foreground); }
-    .session-menu-search {
-      width: 100%; padding: 8px 12px; margin: 8px 12px;
-      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.25));
-      border-radius: 4px; background: var(--vscode-input-background);
-      color: var(--vscode-input-foreground); font: inherit;
-      font-family: var(--ui-font); font-size: 0.85em;
+    /* Search input removed - no longer needed */
+    /* Session menu removed - replaced with inline buttons */
+
+    /* ── Inline header buttons ──────────────────────────── */
+    #new-session-btn {
+      background: none; border: none; color: var(--gold); font-size: 1.4em; cursor: pointer;
+      padding: 0; flex-shrink: 0;
     }
-    .session-menu-search:focus { outline: none; border-color: var(--gold); }
-    .session-menu-list {
-      max-height: 300px; overflow-y: auto; padding: 0 4px;
+    #new-session-btn:hover { color: #f0c040; }
+    #compact-btn {
+      background: none; border: none; color: var(--gold); font-size: 1.4em; cursor: pointer;
+      padding: 0 2px; flex-shrink: 0;
     }
-    .session-menu-item {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 10px 12px; cursor: pointer;
-      font-size: 0.85em; font-family: var(--ui-font);
-      color: var(--vscode-foreground);
-    }
-    .session-menu-item.active {
-      background: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.08));
-    }
-    .session-menu-item:hover:not(.active) {
-      background: var(--gold-subtle);
-    }
-    .session-menu-item .item-title {
-      flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    .session-menu-item .item-meta {
-      opacity: 0.5; font-size: 0.8em; margin-left: 10px;
-    }
-    .session-menu-item .item-time {
-      opacity: 0.5; font-size: 0.75em; color: var(--vscode-descriptionForeground);
-      white-space: nowrap; margin-left: 8px;
-    }
-    .session-menu-actions {
-      display: flex; gap: 4px; margin-left: 8px;
-    }
-    .session-menu-action-btn {
-      background: none; border: none; color: var(--vscode-descriptionForeground);
-      cursor: pointer; padding: 4px; font-size: 1em;
-    }
-    .session-menu-action-btn:hover { color: var(--vscode-foreground); }
-    .session-menu-action-btn.delete:hover { color: var(--vscode-errorForeground, #C94040); }
-    .session-menu-item .add-btn {
-      opacity: 0; transition: opacity 0.15s;
-    }
-    .session-menu-item:hover:not(.active) .add-btn { opacity: 0.5; }
-    .session-menu-item:hover:not(.active) .add-btn:hover { opacity: 1; }
-    .session-menu-footer {
-      padding: 6px 12px; font-size: 0.78em; font-family: var(--ui-font);
-      color: var(--vscode-descriptionForeground); cursor: pointer;
-      border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
-      text-align: center;
-    }
-    .session-menu-footer:hover { color: var(--gold); background: var(--gold-subtle); }
-    .session-menu-footer .key-hint {
-      opacity: 0.6; font-size: 0.8em; margin-left: 4px;
-    }
-      position: absolute; top: calc(100% + 1px); left: 0; right: 0;
-      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
-      border: 1px solid var(--vscode-dropdown-border, var(--vscode-sideBarSectionHeader-border));
-      border-radius: 0 0 4px 4px; z-index: 200; overflow: hidden;
-    }
-    .status-dropdown .menu-item {
-      padding: 5px 10px; font-size: 0.82em; font-family: var(--ui-font);
-      color: var(--vscode-foreground); cursor: pointer;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      display: flex; align-items: center; gap: 6px;
-    }
-    .status-dropdown .menu-item:hover { background: var(--gold-subtle); }
-    .status-dropdown .menu-item.active { color: var(--gold); font-weight: 600; }
-    .status-dropdown .menu-item .item-meta {
-      opacity: 0.4; font-size: 0.85em; margin-left: auto; flex-shrink: 0;
-    }
-    .status-dropdown .menu-footer {
-      padding: 5px 10px; font-size: 0.82em; font-family: var(--ui-font);
-      color: var(--vscode-descriptionForeground); cursor: pointer;
-      border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
-    }
-    .status-dropdown .menu-footer:hover { background: var(--gold-subtle); color: var(--gold); }
-    .session-action {
-      opacity: 0; cursor: pointer; font-size: 0.9em; flex-shrink: 0;
-      padding: 0 2px; transition: opacity 0.15s;
-    }
-    .menu-item:hover .session-action { opacity: 0.5; }
-    .session-action:hover { opacity: 1 !important; }
-    .delete-session:hover { color: var(--vscode-errorForeground, #C94040); }
+    #compact-btn:hover { color: #f0c040; }
 
     /* ── Messages ───────────────────────────────────── */
     #messages {
