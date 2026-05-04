@@ -10,3 +10,7 @@
 	path = vendor/hermes-agent
 	url = git@github.com:RallardM/hermes-agent.git
 	branch = main
+[submodule "vendor/vscode-copilot-chat"]
+	path = vendor/vscode-copilot-chat
+	url = git@github.com:microsoft/vscode-copilot-chat.git
+	branch = main
