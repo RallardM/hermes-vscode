@@ -12,14 +12,14 @@ type Vscode = { postMessage(msg: FromWebview): void };
 // ── Dropdown management ──────────────────────────────
 
 export function closeAllDropdowns(els: {
-  modelMenu: HTMLElement; sessionPicker: HTMLElement;
-  skillsMenu: HTMLElement; overflowMenu: HTMLElement;
-  cmdArgPopover?: HTMLElement;
+  modelMenu: HTMLElement | undefined; sessionPicker: HTMLElement | undefined;
+  skillsMenu: HTMLElement | undefined; overflowMenu: HTMLElement | undefined;
+  cmdArgPopover?: HTMLElement | undefined;
 }): void {
-  els.modelMenu.style.display = 'none';
-  els.sessionPicker.style.display = 'none';
-  els.skillsMenu.style.display = 'none';
-  els.overflowMenu.style.display = 'none';
+  if (els.modelMenu) els.modelMenu.style.display = 'none';
+  if (els.sessionPicker) els.sessionPicker.style.display = 'none';
+  if (els.skillsMenu) els.skillsMenu.style.display = 'none';
+  if (els.overflowMenu) els.overflowMenu.style.display = 'none';
   if (els.cmdArgPopover) els.cmdArgPopover.style.display = 'none';
 }
 

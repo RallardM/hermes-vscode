@@ -97,8 +97,8 @@ ${CSS_TEMPLATE}
       <button id="model-btn-header" title="Switch model">${escapeHtml(modelLabel)} ▾</button>
     </div>
     <div id="header-session">
-      <button id="status-session" title="Sessions">new session</button>
-      <button id="new-session-btn" title="New session" style="background:none;border:none;color:var(--gold);font-size:1.4em;cursor:pointer;padding:0;flex-shrink:0;">➕</button>
+      <button id="status-session" title="Sessions" style="display:none;"></button>
+      <button id="new-session-btn" title="New session" style="background:none;border:none;color:var(--gold);font-size:2.4em;cursor:pointer;padding:0;flex-shrink:0;font-weight:bold;">+</button>
       <button id="compact-btn" title="Compact session" style="background:none;border:none;color:var(--gold);font-size:1.4em;cursor:pointer;padding:0;flex-shrink:0;">✂</button>
       <div id="status-right">
         <div id="ctx-bar-wrap" style="display:none"><div id="ctx-bar"></div><div id="ctx-bar-fresh"></div></div>
