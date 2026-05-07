@@ -88,18 +88,21 @@ ${CSS_TEMPLATE}
 </head>
 <body>
   <div id="header">
-    <div id="header-brand">
-      <!-- Burger menu removed - replaced with [+] [+] compact icons -->
-      <span class="brand-icon">☤</span>
-      <span class="brand-text">Hermes</span>
-      <span class="brand-version" id="status-version"></span>
-      <span class="brand-sep">·</span>
-      <button id="model-btn-header" title="Switch model">${escapeHtml(modelLabel)} ▾</button>
+    <div id="header-top">
+      <div id="header-brand">
+        <span class="brand-icon">☤</span>
+        <span class="brand-text">Hermes</span>
+        <span class="brand-version" id="status-version"></span>
+        <span class="brand-sep">·</span>
+        <button id="model-btn-header" title="Switch model">${escapeHtml(modelLabel)} ▾</button>
+      </div>
+      <div id="header-actions">
+        <button id="new-session-btn" title="New session">+</button>
+        <button id="compact-btn" title="Compact session">✂</button>
+      </div>
     </div>
     <div id="header-session">
       <button id="status-session" title="Sessions" style="display:none;"></button>
-      <button id="new-session-btn" title="New session" style="background:none;border:none;color:var(--gold);font-size:2.4em;cursor:pointer;padding:0;flex-shrink:0;font-weight:bold;">+</button>
-      <button id="compact-btn" title="Compact session" style="background:none;border:none;color:var(--gold);font-size:1.4em;cursor:pointer;padding:0;flex-shrink:0;">✂</button>
       <div id="status-right">
         <div id="ctx-bar-wrap" style="display:none"><div id="ctx-bar"></div><div id="ctx-bar-fresh"></div></div>
         <span id="status-context"></span>
@@ -218,7 +221,7 @@ const CSS_TEMPLATE = /* css */ `
       overflow: hidden;
     }
 
-    /* ── Header (two rows) ────────────────────────────── */
+    /* ── Header ───────────────────────────────────────── */
     #header {
       border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
       background: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.08));
@@ -228,11 +231,23 @@ const CSS_TEMPLATE = /* css */ `
       z-index: 10;
     }
 
-    /* Row 1: brand + model */
-    #header-brand {
-      display: flex; align-items: center; gap: 6px;
+    /* Row 1: brand (left) + action buttons (right), wraps when narrow */
+    #header-top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
       padding: 5px 8px 2px;
+      gap: 4px;
       font-size: 0.85em;
+    }
+
+    /* Brand group — grows to fill available space */
+    #header-brand {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1 1 auto;
+      min-width: 0;
     }
     #header-brand .brand-icon { font-size: 1.4em; color: var(--gold); }
     #header-brand .brand-text { font-weight: 700; color: var(--gold); letter-spacing: 0.04em; }
@@ -245,7 +260,30 @@ const CSS_TEMPLATE = /* css */ `
     }
     #model-btn-header:hover { color: var(--gold); }
 
-    /* Row 2: session + tokens */
+    /* Action buttons — pushed right on the same line; wrap to their own
+       right-aligned line when the panel is too narrow to fit both groups */
+    #header-actions {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
+    #new-session-btn {
+      background: none; border: none; color: var(--gold);
+      font-size: 1.6em; font-weight: bold;
+      cursor: pointer; padding: 0 2px; flex-shrink: 0;
+      line-height: 1;
+    }
+    #new-session-btn:hover { color: #f0c040; }
+    #compact-btn {
+      background: none; border: none; color: var(--gold);
+      font-size: 1.1em; cursor: pointer; padding: 0 2px; flex-shrink: 0;
+      line-height: 1;
+    }
+    #compact-btn:hover { color: #f0c040; }
+
+    /* Row 2: session name + token meter */
     #header-session {
       display: flex; align-items: center; justify-content: space-between;
       padding: 2px 8px 5px; gap: 8px;
@@ -323,20 +361,6 @@ const CSS_TEMPLATE = /* css */ `
       cursor: pointer; font-size: 1.2em; flex-shrink: 0; padding: 0;
     }
     .session-menu-close:hover { color: var(--vscode-foreground); }
-    /* Search input removed - no longer needed */
-    /* Session menu removed - replaced with inline buttons */
-
-    /* ── Inline header buttons ──────────────────────────── */
-    #new-session-btn {
-      background: none; border: none; color: var(--gold); font-size: 1.4em; cursor: pointer;
-      padding: 0; flex-shrink: 0;
-    }
-    #new-session-btn:hover { color: #f0c040; }
-    #compact-btn {
-      background: none; border: none; color: var(--gold); font-size: 1.4em; cursor: pointer;
-      padding: 0 2px; flex-shrink: 0;
-    }
-    #compact-btn:hover { color: #f0c040; }
 
     /* ── Messages ───────────────────────────────────── */
     #messages {
