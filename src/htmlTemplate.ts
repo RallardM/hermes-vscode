@@ -4,6 +4,7 @@
  * Extracted from chatPanel.ts to isolate the ~600-line template
  * from the controller logic. All user-controlled content is
  * HTML-escaped via escapeHtml() before injection.
+ * src\htmlTemplate.ts
  */
 
 import * as vscode from 'vscode';
@@ -99,6 +100,7 @@ ${CSS_TEMPLATE}
       <div id="header-actions">
         <button id="new-session-btn" title="New session">+</button>
         <button id="compact-btn" title="Compact session">✂</button>
+        <button id="history-btn" title="Session history">☰</button>
       </div>
     </div>
     <div id="header-session">
@@ -112,6 +114,24 @@ ${CSS_TEMPLATE}
       ${modelMenuHtml}
     </div>
   </div>
+
+  <!-- History panel — replaces #messages when open.
+       Wired in main.ts: historyBtn click → show panel, hide messages.
+       Sessions loaded from store.allSessionsReversed() client-side.
+       Click row  → postMessage switchSession + close panel.
+       Click 🗑    → postMessage deleteSession + re-render list.
+       Click Back → hide panel, show messages. -->
+  <div id="history-panel" style="display:none">
+    <div id="history-panel-header">
+      <button id="history-back" title="Back to chat">← Back</button>
+      <span id="history-panel-title">Session History</span>
+    </div>
+    <div id="history-search-wrap">
+      <input id="history-search" type="text" placeholder="Search sessions…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div id="history-list"></div>
+  </div>
+
   <div id="messages">
     <div id="empty-state">
       <div class="empty-logo">☤</div>
@@ -260,8 +280,7 @@ const CSS_TEMPLATE = /* css */ `
     }
     #model-btn-header:hover { color: var(--gold); }
 
-    /* Action buttons — pushed right on the same line; wrap to their own
-       right-aligned line when the panel is too narrow to fit both groups */
+    /* Action buttons — pushed right; wrap to own right-aligned line when narrow */
     #header-actions {
       display: flex;
       align-items: center;
@@ -272,16 +291,23 @@ const CSS_TEMPLATE = /* css */ `
     #new-session-btn {
       background: none; border: none; color: var(--gold);
       font-size: 1.6em; font-weight: bold;
-      cursor: pointer; padding: 0 2px; flex-shrink: 0;
-      line-height: 1;
+      cursor: pointer; padding: 0 2px; flex-shrink: 0; line-height: 1;
     }
     #new-session-btn:hover { color: #f0c040; }
     #compact-btn {
       background: none; border: none; color: var(--gold);
-      font-size: 1.1em; cursor: pointer; padding: 0 2px; flex-shrink: 0;
-      line-height: 1;
+      font-size: 1.1em; cursor: pointer; padding: 0 2px; flex-shrink: 0; line-height: 1;
     }
     #compact-btn:hover { color: #f0c040; }
+
+    /* History button — right of ✂ */
+    #history-btn {
+      background: none; border: none; color: var(--vscode-descriptionForeground);
+      font-size: 1.05em; cursor: pointer; padding: 0 2px; flex-shrink: 0; line-height: 1;
+      transition: color 0.15s;
+    }
+    #history-btn:hover { color: var(--gold); }
+    #history-btn.active { color: var(--gold); }
 
     /* Row 2: session name + token meter */
     #header-session {
@@ -313,32 +339,137 @@ const CSS_TEMPLATE = /* css */ `
     #status-context.warn { color: var(--gold); opacity: 1; }
     #status-context.crit { color: #C94040; opacity: 1; }
 
-    /* Token progress bar — dual layer: total (faded) + fresh (solid) */
+    /* Token progress bar */
     #ctx-bar-wrap {
       width: 52px; height: 5px;
       background: rgba(255,255,255,0.1);
       border-radius: 2px; overflow: hidden; flex-shrink: 0;
       position: relative;
     }
-    /* Total usage (cached + fresh) — faded background fill */
     #ctx-bar {
       position: absolute; top: 0; left: 0;
       height: 100%; width: 0%;
-      border-radius: 2px;
-      background: var(--gold);
-      opacity: 0.3;
+      border-radius: 2px; background: var(--gold); opacity: 0.3;
       transition: width 0.4s ease, background 0.3s;
     }
-    /* Fresh (non-cached) usage — solid foreground fill */
     #ctx-bar-fresh {
       position: absolute; top: 0; left: 0;
       height: 100%; width: 0%;
-      border-radius: 2px;
-      background: var(--gold);
+      border-radius: 2px; background: var(--gold);
       transition: width 0.4s ease, background 0.3s;
     }
     #ctx-bar.warn, #ctx-bar-fresh.warn { background: var(--gold); }
     #ctx-bar.crit, #ctx-bar-fresh.crit { background: #C94040; }
+
+    /* ── History Panel ─────────────────────────────────────────────────────
+       Swaps with #messages. flex:1 fills remaining height when display:flex.
+       JS: open  → panel display='flex', messages display='none'
+           close → panel display='none', messages display=''
+    ── */
+    #history-panel {
+      flex: 1;
+      flex-direction: column;
+      min-height: 0;
+      font-family: var(--ui-font);
+      background: var(--vscode-sideBar-background);
+    }
+
+    #history-panel-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
+      flex-shrink: 0;
+    }
+    #history-back {
+      background: none; border: none; cursor: pointer;
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--ui-font); font-size: 0.82em;
+      padding: 2px 6px; border-radius: 3px;
+      transition: color 0.15s, background 0.15s;
+    }
+    #history-back:hover { color: var(--gold); background: var(--gold-subtle); }
+
+    #history-panel-title {
+      font-size: 0.82em; font-weight: 600;
+      color: var(--vscode-foreground);
+      letter-spacing: 0.02em;
+    }
+
+    #history-search-wrap {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
+      flex-shrink: 0;
+    }
+    #history-search {
+      width: 100%;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
+      border-radius: 4px; padding: 5px 8px;
+      font-family: var(--ui-font); font-size: 0.85em;
+    }
+    #history-search:focus {
+      outline: 1px solid var(--gold); outline-offset: -1px; border-color: var(--gold);
+    }
+    #history-search::placeholder { opacity: 0.4; }
+
+    #history-list {
+      flex: 1; overflow-y: auto; overflow-x: hidden;
+    }
+
+    .history-empty {
+      text-align: center; padding: 28px 12px;
+      font-size: 0.82em; color: var(--vscode-descriptionForeground); opacity: 0.55;
+    }
+
+    /* Date group label */
+    .history-group-label {
+      padding: 8px 10px 3px;
+      font-size: 0.68em; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--vscode-descriptionForeground); opacity: 0.5;
+    }
+
+    /* Session row */
+    .history-row {
+      display: flex; align-items: center;
+      padding: 0 8px 0 10px;
+      border-left: 3px solid transparent;
+      transition: background 0.1s, border-color 0.1s;
+      cursor: pointer;
+    }
+    .history-row:hover { background: var(--gold-subtle); }
+    .history-row.is-active { border-left-color: var(--gold); }
+
+    .history-row-body {
+      flex: 1; min-width: 0; padding: 8px 0;
+    }
+    .history-row-title {
+      font-size: 0.85em; font-weight: 500;
+      color: var(--vscode-foreground);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .history-row.is-active .history-row-title { color: var(--gold); }
+    .history-row-meta {
+      font-size: 0.72em; color: var(--vscode-descriptionForeground);
+      opacity: 0.6; margin-top: 2px;
+    }
+
+    /* Delete button — visible on row hover only */
+    .history-row-del {
+      flex-shrink: 0; background: none; border: none; cursor: pointer;
+      color: var(--vscode-descriptionForeground); font-size: 0.85em;
+      padding: 4px 6px; border-radius: 3px; line-height: 1;
+      opacity: 0; transition: opacity 0.12s, color 0.12s, background 0.12s;
+    }
+    .history-row:hover .history-row-del { opacity: 0.5; }
+    .history-row-del:hover {
+      opacity: 1 !important;
+      color: var(--vscode-errorForeground, #f48771);
+      background: rgba(244,135,113,0.14);
+    }
 
     /* ── Session Menu ──────────────────────────────────── */
     #session-menu {

@@ -408,11 +408,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.log(`[ui] skills: [${this.selectedSkills.join(', ')}]`);
       this.post({ type: 'statusBar', selectedSkills: this.selectedSkills });
 
+// AFTER
     } else if (msg.type === 'llamaRequest' && msg.text) {
-      // Custom llama.cpp model — send HTTP request directly to llama.cpp
       const llamaUrl = 'http://127.0.0.1/v1/';
       this.log(`[llama] sending HTTP request to ${llamaUrl}`);
       return this.handleLlamaRequest(msg.text);
+
+    } else if (msg.type === 'listSessions') {
+      console.log('[chatPanel] listSessions — store count:', this.store.allSessions().length, '| activeId:', this.store.activeId);
+      console.log('[chatPanel] sessions:', JSON.stringify(
+        this.store.allSessionsReversed().map(s => ({ id: s.id, title: s.title, msgs: s.messages.length }))
+      ));
+      const sessions = this.store.allSessionsReversed().map(s => ({
+        id:           s.id,
+        title:        s.title,
+        messageCount: s.messages.length,
+        createdAt:    s.createdAt,
+        updatedAt:    s.updatedAt,
+      }));
+      console.log('[chatPanel] sending sessionsList, count:', sessions.length);
+      void this.view?.webview.postMessage({ type: 'sessionsList', sessions, activeId: this.store.activeId });
+      return;
     }
 
     // Default case to satisfy TypeScript switch statement

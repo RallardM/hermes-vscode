@@ -240,7 +240,8 @@ export class AcpClient extends EventEmitter {
    */
   async listSessions(): Promise<ChatSession[]> {
     const result = await this.call('session/list', {});
-    
+    console.log('[acp] session/list raw result type:', typeof result, '| value:', JSON.stringify(result));
+
     // Handle unexpected response types gracefully (e.g., null, undefined, empty object)
     if (!Array.isArray(result)) {
       console.warn('[acp] session/list returned non-array, returning empty list');

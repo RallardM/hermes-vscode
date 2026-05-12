@@ -1,6 +1,7 @@
 /**
  * Webview entry point — thin wiring layer.
  * Imports modules, grabs DOM refs, connects event handlers.
+ * src\webview\main.ts
  */
 
 import DOMPurify from 'dompurify';
@@ -23,22 +24,10 @@ import type { ChatPanelProvider } from '../chatPanel';
 let sessionMgr: SessionManagerExport;
 let store: SessionStoreExport;
 
-// Injected by the provider after resolveWebviewView
-export function setSessionManager(sm: SessionManagerExport) {
-  sessionMgr = sm;
-}
-
-export function setSessionStore(s: SessionStoreExport) {
-  store = s;
-}
-
-export function getSessionManager(): SessionManagerExport {
-  return sessionMgr;
-}
-
-export function getSessionStore(): SessionStoreExport {
-  return store;
-}
+export function setSessionManager(sm: SessionManagerExport) { sessionMgr = sm; }
+export function setSessionStore(s: SessionStoreExport) { store = s; }
+export function getSessionManager(): SessionManagerExport { return sessionMgr; }
+export function getSessionStore(): SessionStoreExport { return store; }
 
 declare function acquireVsCodeApi(): { postMessage(msg: FromWebview): void };
 const vscode = acquireVsCodeApi();
@@ -46,9 +35,6 @@ marked.setOptions({ breaks: true, gfm: true });
 
 // ── State ────────────────────────────────────────────
 const S = createInitialState();
-
-// ── Session menu UI elements (replaced with inline buttons) ───────────────────
-// Session menu removed — replaced with [+][+] and compact (✂) buttons in header
 
 // ── DOM refs ─────────────────────────────────────────
 const messagesEl       = document.getElementById('messages')!;
@@ -83,6 +69,13 @@ const skillsMenu       = document.getElementById('skills-menu') as HTMLDivElemen
 const cmdArgPopover    = document.getElementById('cmd-arg-popover') as HTMLDivElement;
 const cmdArgInput      = document.getElementById('cmd-arg-input') as HTMLInputElement;
 const cmdArgLabel      = document.getElementById('cmd-arg-label') as HTMLElement;
+
+// ── History panel DOM refs ────────────────────────────
+const historyBtn    = document.getElementById('history-btn') as HTMLButtonElement;
+const historyPanel  = document.getElementById('history-panel') as HTMLDivElement;
+const historyBack   = document.getElementById('history-back') as HTMLButtonElement;
+const historySearch = document.getElementById('history-search') as HTMLInputElement;
+const historyList   = document.getElementById('history-list') as HTMLDivElement;
 
 const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, cmdArgPopover };
 const statusEls = { statusVersionEl, modelBtnHeader, modelMenu, statusSessionEl, statusContextEl, ctxBarWrap, ctxBar, ctxBarFresh };
@@ -126,7 +119,7 @@ function autoScroll(): void {
 // call marked.parse() on every single token, but still render frequently
 // enough to avoid the "plaintext then jump to formatted" flash.
 function scheduleMarkdownRender(): void {
-  if (S.markdownDebounceTimer) return; // already scheduled
+  if (S.markdownDebounceTimer) return;
   S.markdownDebounceTimer = setTimeout(() => {
     S.markdownDebounceTimer = null;
     if (S.currentAgentEl && S.currentAgentText) {
@@ -166,11 +159,151 @@ const KNOWN_SLASH_COMMANDS = new Set([
   'title', 'yolo', 'new', 'retry', 'status', 'usage', 'compress',
   'reasoning', 'save',
 ]);
+
 function isSlashCommand(text: string): boolean {
   if (!text.startsWith('/')) return false;
   const first = text.slice(1).split(/\s/, 1)[0].toLowerCase();
   return KNOWN_SLASH_COMMANDS.has(first);
 }
+
+// ── History Panel ─────────────────────────────────────────────────────────
+//
+// Architecture: webview cannot call extension-side store directly.
+// All session data flows through postMessage:
+//
+//   openHistoryPanel()
+//     → postMessage({ type: 'listSessions' })
+//     → chatPanel.ts handles, responds { type: 'sessionsList', sessions, activeId }
+//     → case 'sessionsList' below → renderHistoryRows()
+//
+//   row click (open)
+//     → postMessage({ type: 'switchSession', sessionId })
+//     → chatPanel.ts switches + sends loadHistory + statusBar
+//     → closeHistoryPanel()
+//
+//   row click (delete)
+//     → postMessage({ type: 'deleteSession', sessionId })
+//     → chatPanel.ts deletes + sends sessionsList (re-triggers render)
+//     → optimistic local filter for instant feedback
+//
+// ─────────────────────────────────────────────────────────────────────────
+
+// Cache populated by 'sessionsList' message from extension
+interface HistorySession {
+  id: string;
+  title: string;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+let _historySessions: HistorySession[] = [];
+let _historyActiveId = '';
+
+function escHtml(v: string | undefined): string {
+  const m: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return (v || '').replace(/[&<>"']/g, c => m[c] || c);
+}
+
+function relativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? 'yesterday' : `${d}d ago`;
+}
+
+function renderHistoryRows(query = ''): void {
+  const q = query.toLowerCase().trim();
+  const filtered = q
+    ? _historySessions.filter(s => s.title.toLowerCase().includes(q))
+    : _historySessions;
+
+  if (filtered.length === 0) {
+    historyList.innerHTML = `<div class="history-empty">${_historySessions.length === 0 ? 'No sessions yet' : 'No sessions match your search'}</div>`;
+    return;
+  }
+
+  // Group by recency
+  const now = Date.now();
+  const DAY = 86_400_000;
+  const groups: [string, HistorySession[]][] = [
+    ['Today',     filtered.filter(s => now - s.updatedAt <  DAY)],
+    ['Yesterday', filtered.filter(s => now - s.updatedAt >= DAY && now - s.updatedAt < 2 * DAY)],
+    ['This week', filtered.filter(s => now - s.updatedAt >= 2 * DAY && now - s.updatedAt < 7 * DAY)],
+    ['Older',     filtered.filter(s => now - s.updatedAt >= 7 * DAY)],
+  ];
+
+  let html = '';
+  for (const [label, sessions] of groups) {
+    if (!sessions.length) continue;
+    html += `<div class="history-group-label">${label}</div>`;
+    for (const s of sessions) {
+      const active = s.id === _historyActiveId;
+      const count = s.messageCount;
+      const del = active ? '' : `<button class="history-row-del" data-id="${escHtml(s.id)}" title="Delete">🗑</button>`;
+      html += `
+        <div class="history-row${active ? ' is-active' : ''}" data-id="${escHtml(s.id)}">
+          <div class="history-row-body">
+            <div class="history-row-title">${escHtml(s.title || 'Untitled')}</div>
+            <div class="history-row-meta">${count} msg${count !== 1 ? 's' : ''} · ${relativeTime(s.updatedAt)}</div>
+          </div>
+          ${del}
+        </div>`;
+    }
+  }
+  historyList.innerHTML = html;
+
+  // Delegate clicks
+  historyList.querySelectorAll<HTMLElement>('.history-row-body').forEach(body => {
+    body.addEventListener('click', () => {
+      const id = (body.closest('.history-row') as HTMLElement)?.dataset.id;
+      if (!id) return;
+      if (id === _historyActiveId) {
+        // Already active — just close
+        closeHistoryPanel();
+      } else {
+        vscode.postMessage({ type: 'switchSession', sessionId: id });
+        closeHistoryPanel();
+      }
+    });
+  });
+
+  historyList.querySelectorAll<HTMLButtonElement>('.history-row-del').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      if (!id) return;
+      // Optimistic: remove from local cache and re-render immediately
+      _historySessions = _historySessions.filter(s => s.id !== id);
+      renderHistoryRows(historySearch.value);
+      // Persist via extension
+      vscode.postMessage({ type: 'deleteSession', sessionId: id });
+    });
+  });
+}
+
+function openHistoryPanel(): void {
+  historyPanel.style.display = 'flex';
+  messagesEl.style.display = 'none';
+  historyBtn.classList.add('active');
+  historySearch.value = '';
+  historyList.innerHTML = '<div class="history-empty">Loading…</div>';
+  // Request fresh list from extension (the only source of truth)
+  vscode.postMessage({ type: 'listSessions' });
+}
+
+function closeHistoryPanel(): void {
+  historyPanel.style.display = 'none';
+  messagesEl.style.display = '';
+  historyBtn.classList.remove('active');
+}
+
+historyBtn.addEventListener('click', e => { e.stopPropagation(); openHistoryPanel(); });
+historyBack.addEventListener('click', closeHistoryPanel);
+historySearch.addEventListener('input', () => renderHistoryRows(historySearch.value));
 
 // ── Send ─────────────────────────────────────────────
 function send(): void {
@@ -219,10 +352,9 @@ statusSessionEl.addEventListener('click', (e) => {
   closeFn(); if (!open) sessionPicker.style.display = 'block';
 });
 
-// Compact button — triggers /compact slash command
+// Compact button
 document.getElementById('compact-btn')?.addEventListener('click', (e) => {
   e.stopPropagation();
-  console.log('[webview] ✂ Compact button clicked, sending /compact command');
   if (!S.isBusy) {
     S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
     showWaiting(messagesEl);
@@ -241,7 +373,7 @@ modelMenu.addEventListener('click', (e) => {
   closeFn(); vscode.postMessage({ type: 'switchModel', model: opt.dataset.command });
 });
 
-// Slash-command menu (hybrid dispatch: execute / confirm / prompt-for-arg)
+// Slash-command menu
 function hideCmdArg(): void {
   cmdArgPopover.style.display = 'none';
   cmdArgInput.value = '';
@@ -280,7 +412,6 @@ overflowMenu.addEventListener('click', (e) => {
   const cmd  = item.dataset.cmd;
   const mode = item.dataset.mode ?? 'execute';
   closeFn();
-
   if (mode === 'execute') {
     vscode.postMessage({ type: 'send', text: cmd });
   } else if (mode === 'confirm') {
@@ -292,7 +423,7 @@ overflowMenu.addEventListener('click', (e) => {
   }
 });
 
-// Empty state prompt chips — send immediately on click
+// Empty state prompt chips
 emptyState?.addEventListener('click', (e) => {
   const chip = (e.target as HTMLElement).closest<HTMLElement>('.prompt-chip');
   if (!chip?.dataset.prompt) return;
@@ -397,48 +528,27 @@ document.addEventListener('click', closeFn);
 window.addEventListener('resize', () => requestAnimationFrame(syncComposerHeight));
 requestAnimationFrame(syncComposerHeight);
 
-// ── Escape helpers ───────────────────────────────────
+// ── Escape helpers (used by session menu below) ───────────────────────────
 function escapeHtml(value: string | undefined): string {
-  const map: Record<string, string> = { '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' };
+  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   return (value || '').replace(/[&<>"']/g, c => map[c] || c);
 }
 
 function escapeAttr(value: string | undefined): string {
-  return (value || '').replace(/"/g, '"').replace(/</g, '<').replace(/>/g, '>');
+  return (value || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function renderSessionMenu(searchQuery = ''): void {
-  // Guard: store may not be initialized yet (before provider sets it up)
   if (!store) return;
   if (!sessionMenuList) return;
 
-  const sessions = store.allSessionsReversed() as any[];
   const activeSessionId = store.activeId as string;
-
-  // Filter by search query
   let filtered = store.allSessionsReversed() as any[];
   if (searchQuery.trim()) {
     const query = searchQuery.toLowerCase();
-    console.log('[DEBUG] Filtering sessions with query:', query);
-    
-    // Log each session to debug filtering
-    const sessionList = store.allSessionsReversed() as any[];
-    sessionList.forEach((s: any) => {
-      console.log('[DEBUG] Session title:', s.title, '| lowercase:', s.title ? s.title.toLowerCase() : 'undefined');
-    });
-    
-    filtered = filtered.filter((s: any) => {
-      // Handle sessions without title
-      const sessionTitle = s.title || '';
-      const matches = sessionTitle.toLowerCase().includes(query);
-      console.log('[DEBUG] Session', sessionTitle, 'matches query', query, ':', matches);
-      return matches;
-    });
-    
-    console.log('[DEBUG] Filtered from', sessionList.length, 'to', filtered.length, 'sessions');
+    filtered = filtered.filter((s: any) => (s.title || '').toLowerCase().includes(query));
   }
 
-  // Build menu items
   const itemsHtml = filtered.map((session: any) => {
     const isActive = session.id === activeSessionId;
     const time = formatSessionTime(session.updatedAt);
@@ -457,33 +567,23 @@ function renderSessionMenu(searchQuery = ''): void {
     `;
   }).join('');
 
-  // Footer hint
-  const footerHtml = filtered.length > 0
-    ? `<div class="session-menu-footer" data-action="new"><span>+ New session</span> <span class="key-hint">Ctrl+L</span></div>`
-    : `<div class="session-menu-footer" data-action="new"><span>+ New session</span> <span class="key-hint">Ctrl+L</span></div>`;
-
+  const footerHtml = `<div class="session-menu-footer" data-action="new"><span>+ New session</span> <span class="key-hint">Ctrl+L</span></div>`;
   sessionMenuList.innerHTML = itemsHtml + footerHtml;
 
-  // Add click handlers
   sessionMenuList.querySelectorAll('.session-menu-item').forEach((item: Element) => {
     item.addEventListener('click', (ev: Event) => {
       ev.stopPropagation();
       const sessionId = item.getAttribute('data-session-id');
-      if (sessionId) {
-        switchSession(sessionId);
-      }
+      if (sessionId) { store.activeId = sessionId; store.switchTo(sessionId); renderSessionMenu(); }
     });
   });
 
   sessionMenuList.querySelectorAll('.session-menu-action-btn').forEach((btn: Element) => {
     btn.addEventListener('click', (ev: Event) => {
-      ev.stopPropagation();
-      ev.preventDefault();
+      ev.stopPropagation(); ev.preventDefault();
       const action = btn.getAttribute('data-action');
       const sessionId = btn.getAttribute('data-session-id');
-      if (action && sessionId) {
-        handleSessionAction(action, sessionId);
-      }
+      if (action && sessionId) handleSessionAction(action, sessionId);
     });
   });
 
@@ -491,66 +591,35 @@ function renderSessionMenu(searchQuery = ''): void {
     btn.addEventListener('click', (ev: Event) => {
       ev.stopPropagation();
       const action = btn.getAttribute('data-action');
-      if (action) {
-        handleSessionAction(action, null);
-      }
+      if (action) handleSessionAction(action, null);
     });
   });
 
-  // Show menu
-  if (sessionMenuList) {
-    sessionMenuList.style.display = 'block';
-  }
+  if (sessionMenuList) sessionMenuList.style.display = 'block';
   S.showSessionMenu = true;
-}
-
-function switchSession(sessionId: string): void {
-  store.activeId = sessionId;
-  store.switchTo(sessionId);
-  renderSessionMenu();
 }
 
 function handleSessionAction(action: string, sessionId: string | null): void {
   switch (action) {
     case 'newSession':
-      // Log that we're requesting a new session
-      console.log('[webview] newSession requested');
-      // Send message to extension to create new session
       vscode.postMessage({ type: 'newSession' });
-      // Show menu again so user can see new session
-      S.showSessionMenu = false;
-      renderSessionMenu();
-      break;
-
+      S.showSessionMenu = false; renderSessionMenu(); break;
     case 'compact':
-      if (sessionId) {
-        vscode.postMessage({ type: 'compactSession', sessionId });
-      }
-      S.showSessionMenu = false;
-      renderSessionMenu();
-      break;
-
+      if (sessionId) vscode.postMessage({ type: 'compactSession', sessionId });
+      S.showSessionMenu = false; renderSessionMenu(); break;
     case 'save':
-      if (sessionId) {
-        vscode.postMessage({ type: 'saveSession', sessionId });
-      }
-      S.showSessionMenu = false;
-      renderSessionMenu();
-      break;
-
+      if (sessionId) vscode.postMessage({ type: 'saveSession', sessionId });
+      S.showSessionMenu = false; renderSessionMenu(); break;
     case 'delete':
       if (sessionId) {
         vscode.postMessage({ type: 'deleteSession', sessionId });
-        S.showSessionMenu = false;
-        renderSessionMenu();
+        S.showSessionMenu = false; renderSessionMenu();
       }
       break;
-
     case 'chat':
       if (sessionId) {
         store.switchTo(sessionId);
-        S.showSessionMenu = false;
-        renderSessionMenu();
+        S.showSessionMenu = false; renderSessionMenu();
       }
       break;
   }
@@ -558,38 +627,25 @@ function handleSessionAction(action: string, sessionId: string | null): void {
 
 function formatSessionTime(timestamp: number | undefined): string {
   const date = new Date(timestamp || Date.now());
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
+  const diffMs = Date.now() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
-
   if (diffMins < 1) return 'Just now';
   if (diffMins < 60) return `${diffMins}m ago`;
   const diffHours = Math.floor(diffMins / 60);
   if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
 }
 
-// Event delegation for inline header buttons (replaced burger menu with compact button)
 document.addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
-  
-  // New session button (plus icon) — creates a new session
   if (target.id === 'new-session-btn' || target.closest('#new-session-btn')) {
     e.stopPropagation();
-    console.log('[webview] [+] New session button clicked, creating new session');
     S.showSessionMenu = false;
-    // Send the create session message
     vscode.postMessage({ type: 'newSession' });
-    // Re-render to show the new session
     renderSessionMenu();
-    console.log('[DEBUG] New session created, showSessionMenu:', S.showSessionMenu);
   }
-  
-  // Compact button (scissors icon) — triggers /compact command
   if (target.id === 'compact-btn' || target.closest('#compact-btn')) {
     e.stopPropagation();
-    console.log('[webview] ✂ Compact button clicked, sending /compact command');
     if (!S.isBusy) {
       S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
       showWaiting(messagesEl);
@@ -702,8 +758,8 @@ window.addEventListener('message', (e: MessageEvent) => {
       break;
 
     case 'status':
-      if (msg.status === 'connecting')       appendMessage(messagesEl, 'tool', 'Connecting to Hermes…');
-      else if (msg.status === 'connected')   appendMessage(messagesEl, 'tool', 'Connected');
+      if (msg.status === 'connecting')        appendMessage(messagesEl, 'tool', 'Connecting to Hermes…');
+      else if (msg.status === 'connected')    appendMessage(messagesEl, 'tool', 'Connected');
       else if (msg.status === 'disconnected') {
         appendMessage(messagesEl, 'error', 'Hermes disconnected');
         setBusy(false);
@@ -760,21 +816,46 @@ window.addEventListener('message', (e: MessageEvent) => {
       if (msg.sessions && msg.activeSessionId !== undefined) {
         buildSessionPicker(sessionPicker, msg.sessions, msg.activeSessionId, statusSessionEl, S);
       }
-      console.log('[webview] sessionList updated, sessions:', msg.sessions?.length);
       break;
 
+    // ── History panel: extension responds to our listSessions request ──────
+    case 'sessionsList': {
+      // Populate cache — msg.sessions may have updatedAt even if not in the
+      // TS interface (chatPanel sends it); cast to access it safely.
+      const raw = (msg.sessions ?? []) as any[];
+      _historySessions = raw.map(s => ({
+        id:           String(s.id ?? ''),
+        title:        String(s.title ?? ''),
+        messageCount: Number(s.messageCount ?? 0),
+        createdAt:    Number(s.createdAt ?? 0),
+        updatedAt:    Number(s.updatedAt ?? s.createdAt ?? 0),
+      }));
+      _historyActiveId = msg.activeId ?? '';
+      // Re-render only if panel is currently open
+      if (historyPanel.style.display !== 'none') {
+        renderHistoryRows(historySearch.value);
+      }
+      break;
+    }
+
     case 'loadHistory':
-      console.log('[webview] loadHistory called, history length:', (msg.history ?? []).length);
       loadHistory(messagesEl, msg.history ?? [], msg.switched ?? false);
       break;
 
     case 'newSession':
-      console.log('[webview] newSession requested, activeId:', store.activeId);
-      console.log('[webview] calling createSession...');
       vscode.postMessage({ type: 'newSession' });
-      console.log('[webview] newSession message sent');
       S.showSessionMenu = false;
       renderSessionMenu();
+      break;
+
+    // FIX TS2345: guard msg.sessionId (string | undefined) before passing to switchTo
+    case 'switchSession':
+      if (!store || !msg.sessionId) break;
+      store.switchTo(msg.sessionId);
+      break;
+
+    default:
+      console.warn('[webview] unknown message type:', msg.type);
       break;
   }
 });

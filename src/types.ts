@@ -1,6 +1,7 @@
 /**
  * Shared type definitions for the Hermes VS Code extension.
  * Used by both the extension host (Node.js) and webview (browser).
+ * src\types.ts
  */
 
 import type { SkillGroup } from './skillCatalog';
@@ -125,7 +126,8 @@ export interface ToWebview {
     | 'append' | 'thinking' | 'toolCall' | 'done'
     | 'error' | 'status' | 'clear' | 'busy'
     | 'statusBar' | 'sessionList' | 'loadHistory' | 'llamaRequest' | 'sessionPicker' | 'switchSession'
-    | 'new' | 'newSession' | 'compact' | 'save';
+    | 'new' | 'newSession' | 'compact' | 'save'
+    | 'listSessions' | 'sessionsList' | 'renderSessionList';
   text?: string;
   sessionId?: string;
   toolName?: string;
@@ -169,9 +171,10 @@ export interface FromWebview {
     | 'send' | 'switchModel' | 'cancel'
     | 'newSession' | 'switchSession' | 'toggleSessionPicker' | 'renderSessionPicker'
     | 'attachFile' | 'pasteImage' | 'dropFiles' | 'clearAttachments'
-    | 'toggleSkill' | 'renameSession' | 'deleteSession' | 'llamaRequest'
+    | 'toggleSkill' | 'renameSession' | 'llamaRequest'
     | 'sessionList'
-    | 'compactSession' | 'saveSession';
+    | 'compactSession' | 'saveSession'
+    | 'listSessions' | 'sessionsList' | 'renderSessionList' | 'deleteSession';
   text?: string;
   sessionId?: string;
   model?: string;
@@ -180,6 +183,7 @@ export interface FromWebview {
   uris?: string[];
   // Session data for returning updated session lists
   sessions?: WebviewSession[];
+  activeId?: string;  // Added: active session ID for the current selection
   activeSessionId?: string;
   tags?: string[];
 }
@@ -189,4 +193,26 @@ export interface FromWebview {
 export interface AttachedFile {
   name: string;
   path: string;
+}
+
+// ── Session History Navigation ────────────────────────
+
+/**
+ * Session history navigation state.
+ * Tracks conversation history for undo/redo-style navigation.
+ */
+export interface HistoryNavigation {
+  historyStack: HistoryRestoreState[];  // Stack of saved message states
+  currentHistoryIndex: number;         // Current position (0 = top of stack)
+  maxHistoryDepth: number;             // Maximum stack size
+}
+
+/**
+ * State snapshot for history restoration.
+ * Contains the session ID, messages, and position for restoring.
+ */
+export interface HistoryRestoreState {
+  sessionId: string;
+  messages: StoredMessage[];
+  messageIndex: number;
 }

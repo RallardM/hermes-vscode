@@ -3,11 +3,12 @@
  *
  * Manages ChatSession[] in VS Code workspaceState.
  * Owns: create, delete, rename, auto-title, message storage, ACP ID persistence.
+ * src\sessionStore.ts
  */
 
 import * as vscode from 'vscode';
 import type { AcpClient } from './acpClient';
-import type { ChatSession, StoredMessage } from './types';
+import type { ChatSession, StoredMessage, HistoryNavigation, HistoryRestoreState } from './types';
 import { SessionManager } from './sessionManager';
 
 const SESSIONS_KEY = 'hermes.sessions';
@@ -18,6 +19,11 @@ export class SessionStore {
   private readonly acpClient: AcpClient;
   private sessions: ChatSession[] = [];
   private activeSessionId = '';
+  private historyNavigation: HistoryNavigation = {
+    historyStack: [],
+    currentHistoryIndex: 0,
+    maxHistoryDepth: 50,
+  };
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
@@ -108,7 +114,6 @@ export class SessionStore {
   addUserMessage(text: string): void {
     const s = this.active();
     if (s) {
-      // Extract context annotation from session title or agent message
       const contextAnnotation = s.title;
       s.messages.push({
         role: 'user',
@@ -192,17 +197,15 @@ export class SessionStore {
       const hermesTitle = hermes.title as string;
       const hermesCreatedAt = hermes.createdAt as number;
       const hermesUpdatedAt = hermes.updatedAt as number;
-        const hermesMessages = hermes.messages as unknown as Array<Record<string, unknown>>;
+      const hermesMessages = hermes.messages as unknown as Array<Record<string, unknown>>;
       
       const localSession = this.sessions.find(s => s.id === hermesId);
       
       if (localSession) {
-        // Update local session with Hermes data
         if (hermesTitle) localSession.title = hermesTitle;
         if (hermesCreatedAt) localSession.createdAt = hermesCreatedAt;
         if (hermesUpdatedAt) localSession.updatedAt = hermesUpdatedAt;
         
-        // Sync messages from Hermes
         if (hermesMessages && Array.isArray(hermesMessages)) {
           const syncedMessages: StoredMessage[] = hermesMessages.map((m: Record<string, unknown>) => ({
             role: m.role as 'user' | 'assistant' | 'tool' | 'agent' as 'user' | 'tool',
@@ -217,7 +220,6 @@ export class SessionStore {
           localSession.messages = syncedMessages;
         }
       } else {
-        // Create new session from Hermes data
         this.sessions.push({
           id: hermesId,
           title: hermesTitle || 'new session',
@@ -240,7 +242,6 @@ export class SessionStore {
   async compactSession(sessionId: string): Promise<boolean> {
     try {
       await this.acpClient.compactSession(sessionId);
-      // Update local session stats
       const s = this.sessions.find(s => s.id === sessionId);
       if (s) {
         s.toolTimeMs = 0;
@@ -280,7 +281,6 @@ export class SessionStore {
   saveSessionLocal(sessionId: string): void {
     const s = this.sessions.find(s => s.id === sessionId);
     if (s) {
-      // Mark as saved by adding to tags
       if (!s.tags.includes('saved')) {
         s.tags.push('saved');
       }
@@ -289,7 +289,6 @@ export class SessionStore {
   }
 
   filterSessionsByDate(from?: Date, to?: Date): ChatSession[] {
-    const now = Date.now();
     return this.sessions.filter(s => {
       const ts = s.createdAt;
       if (from && ts < from.getTime()) return false;
@@ -335,5 +334,57 @@ export class SessionStore {
 
   private persist(): void {
     void this.context.workspaceState.update(SESSIONS_KEY, this.sessions);
+  }
+
+  // ── History Navigation ────────────────────────────────
+
+  private saveHistoryState(): void {
+    const s = this.active();
+    if (s) {
+      const state: HistoryRestoreState = {
+        sessionId: s.id,
+        messages: [...s.messages],
+        messageIndex: s.messages.length,
+      };
+      if (this.historyNavigation.historyStack.length >= this.historyNavigation.maxHistoryDepth) {
+        this.historyNavigation.historyStack.shift();
+      }
+      this.historyNavigation.historyStack.push(state);
+    }
+  }
+
+  public navigateBack(): boolean {
+    if (this.historyNavigation.currentHistoryIndex <= 0) return false;
+    const prevIndex = this.historyNavigation.currentHistoryIndex - 1;
+    const state = this.historyNavigation.historyStack[prevIndex];
+    this.restoreHistoryState(state);
+    this.historyNavigation.currentHistoryIndex = prevIndex;
+    return true;
+  }
+
+  public navigateForward(): boolean {
+    if (this.historyNavigation.currentHistoryIndex >= this.historyNavigation.historyStack.length - 1)
+      return false;
+    const nextIndex = this.historyNavigation.currentHistoryIndex + 1;
+    const state = this.historyNavigation.historyStack[nextIndex];
+    this.restoreHistoryState(state);
+    this.historyNavigation.currentHistoryIndex = nextIndex;
+    return true;
+  }
+
+  // FIX TS2532: store active() result in a const so the compiler knows it
+  // cannot become undefined between the check and subsequent property writes.
+  private restoreHistoryState(state: HistoryRestoreState): void {
+    const s = this.active();
+    if (s) {
+      s.messages = state.messages;
+      s.updatedAt = Date.now();
+      this.persist();
+    }
+  }
+
+  public clearHistory(): void {
+    this.historyNavigation.historyStack = [];
+    this.historyNavigation.currentHistoryIndex = 0;
   }
 }
