@@ -408,6 +408,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider(ChatPanelProvider.viewId, panel, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
+    vscode.commands.registerCommand('hermes.addFileToChat', (uri?: vscode.Uri) => {
+      // uri is set when triggered from explorer; undefined from editor context menu
+      const fsPath = uri
+        ? uri.fsPath
+        : vscode.window.activeTextEditor?.document.uri.fsPath;
+
+      if (!fsPath) {
+        vscode.window.showWarningMessage('Hermes: no file to attach.');
+        return;
+      }
+      panel.addFileToChat(fsPath);
+    })
   );
 
   // Commands

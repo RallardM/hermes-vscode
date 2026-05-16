@@ -689,6 +689,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  public addFileToChat(fsPath: string): void {
+    this.setAttachedFile(fsPath);
+    void vscode.commands.executeCommand(`${ChatPanelProvider.viewId}.focus`);
+  }
+
   /** Render session picker UI (called from webview via postMessage) */
   private renderSessionPicker(
     sessionId: string,

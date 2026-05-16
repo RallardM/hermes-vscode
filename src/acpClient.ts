@@ -239,26 +239,29 @@ export class AcpClient extends EventEmitter {
    * List all sessions in Hermes.
    */
   async listSessions(): Promise<ChatSession[]> {
-    const result = await this.call('session/list', {});
-    console.log('[acp] session/list raw result type:', typeof result, '| value:', JSON.stringify(result));
+    const raw = await this.call('session/list', {});
+    // Backend returns { sessions: [...] }, not a bare array
+    const result = Array.isArray(raw)
+      ? raw
+      : Array.isArray((raw as any)?.sessions) ? (raw as any).sessions : null;
 
-    // Handle unexpected response types gracefully (e.g., null, undefined, empty object)
-    if (!Array.isArray(result)) {
-      console.warn('[acp] session/list returned non-array, returning empty list');
+    if (!result) {
+      console.warn('[acp] session/list: unexpected shape:', JSON.stringify(raw));
       return [];
     }
-    
+
     return result.map((r: Record<string, unknown>) => ({
-      id: String(r.session_id ?? r.id),
-      title: String(r.title ?? 'New Session'),
-      createdAt: Number(r.created_at ?? Date.now()),
-      updatedAt: Number(r.updated_at ?? r.updated_at ?? Date.now()),
-      messages: Array.isArray(r.messages) ? r.messages : [],
-      acpSessionId: String(r.acp_session_id ?? undefined),
-      apiTimeMs: Number(r.api_time_ms ?? 0),
-      toolTimeMs: Number(r.tool_time_ms ?? 0),
-      peakMemoryBytes: Number(r.peak_memory_bytes ?? 0),
-      tags: Array.isArray(r.tags) ? r.tags : [],
+      // Backend uses camelCase: sessionId, updatedAt (not session_id, updated_at)
+      id:               String(r.sessionId ?? r.session_id ?? r.id),
+      title:            String(r.title ?? 'New Session'),
+      createdAt:        Number(r.createdAt ?? r.created_at ?? Date.now()),
+      updatedAt:        Number(r.updatedAt   ?? r.updated_at ?? Date.now()),
+      messages:         Array.isArray(r.messages) ? r.messages : [],
+      acpSessionId:     String(r.sessionId ?? r.session_id ?? ''),
+      apiTimeMs:        Number(r.api_time_ms ?? 0),
+      toolTimeMs:       Number(r.tool_time_ms ?? 0),
+      peakMemoryBytes:  Number(r.peak_memory_bytes ?? 0),
+      tags:             Array.isArray(r.tags) ? r.tags : [],
     }));
   }
 

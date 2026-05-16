@@ -2,7 +2,7 @@
   "name": "hermes-local-ai-agent",
   "displayName": "Hermes Local AI Agent",
   "description": "VS Code sidebar for the Hermes AI agent. Streams chat, runs tools, manages sessions. Multi-model (Claude, Codex). Communicates over ACP.",
-  "version": "3.1.7",
+  "version": "3.2.4",
   "publisher": "hermes-local-ai",
   "author": "joao",
   "license": "MIT",
@@ -40,16 +40,18 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "extensionKind": [
-    "workspace"
-  ],
   "categories": [
     "AI",
     "Chat",
     "Machine Learning",
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:hermes.openChat",
+    "onCommand:hermes.newSession",
+    "onCommand:hermes.addFileToChat",
+    "onView:hermes.chatView"
+  ],
   "main": "./dist/extension.js",
   "qna": "https://github.com/joaompfp/hermes-vscode/issues",
   "contributes": {
@@ -61,8 +63,39 @@
       {
         "command": "hermes.newSession",
         "title": "Hermes: New Session"
-      }
+      },
+      {
+        "command": "hermes.addFileToChat",
+        "title": "Add to Hermes Chat",
+        "category": "Hermes"
+      }      
     ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "hermes.addFileToChat",
+          "group": "navigation@99"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "hermes.addFileToChat",
+          "group": "navigation@99"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "hermes.addFileToChat",
+          "group": "navigation@99"
+        }
+      ],
+      "tab/context": [
+        {
+          "command": "hermes.addFileToChat",
+          "group": "navigation@99"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
