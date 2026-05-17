@@ -155,6 +155,14 @@ ${CSS_TEMPLATE}
   </div>
   <div id="queue-status"></div>
   <div id="bottom-bar">
+    <div class="btn-wrap">
+      <button class="cmd-btn mode-btn" id="mode-btn" title="Switch mode">Ask ▾</button>
+      <div id="mode-menu" style="display:none">
+        <div class="mode-option" data-mode="ask">Ask</div>
+        <div class="mode-option" data-mode="agent">Agent</div>
+        <div class="mode-option" data-mode="plan">Plan</div>
+      </div>
+    </div>
     <button class="cmd-btn" id="attach-btn" title="Attach file"><span class="btn-icon">⊕</span></button>
     <div class="btn-wrap">
       <button class="cmd-btn" id="skills-btn" title="Skills"><span class="btn-icon">✦</span></button>
@@ -887,12 +895,24 @@ const CSS_TEMPLATE = /* css */ `
       min-width: 180px; z-index: 200; overflow: hidden;
       max-height: 350px; overflow-y: auto;
     }
+    #mode-menu {
+      position: absolute; bottom: calc(100% + 4px); left: 0; right: auto;
+      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-sideBarSectionHeader-border));
+      border-bottom: none; border-radius: 4px 4px 0 0;
+      min-width: 180px; z-index: 200; overflow: hidden;
+      max-height: 350px; overflow-y: auto;
+    }
+    .mode-option,
     .model-option {
       padding: 5px 10px; font-size: 0.85em; font-family: var(--ui-font);
       color: var(--vscode-foreground); cursor: pointer; white-space: nowrap;
     }
+    .mode-option:hover,
     .model-option:hover { background: var(--gold-subtle); color: var(--gold); }
+    .mode-option.active,
     .model-option.active { color: var(--gold); font-weight: 600; }
+    .mode-option.active::before,
     .model-option.active::before { content: '✓ '; }
     .model-group-label {
       padding: 4px 10px 2px; font-size: 0.7em; font-family: var(--ui-font);
@@ -910,6 +930,11 @@ const CSS_TEMPLATE = /* css */ `
       cursor: pointer; white-space: nowrap; flex-shrink: 0;
       display: inline-flex; align-items: center; justify-content: center; gap: 3px;
       width: var(--toolbar-height); height: var(--toolbar-height);
+    }
+    .cmd-btn.mode-btn {
+      min-width: 86px;
+      width: auto;
+      padding: 0 10px;
     }
     .cmd-btn:hover { color: var(--gold); border-color: var(--gold-border); }
     .cmd-btn:active { background: var(--gold-subtle); }

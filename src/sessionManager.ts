@@ -222,6 +222,15 @@ export class SessionManager {
     this.updateHandler?.({ session_id: sessionId, done: true, contextUsed, contextSize, cachedTokens });
   }
 
+  async setMode(mode: string, cwd: string): Promise<void> {
+    const sessionId = await this.ensureSession(cwd);
+    this.log(`[session] set mode ${mode} for ${sessionId}`);
+    await this.client.call('session/set_session_mode', {
+      sessionId,
+      mode_id: mode,
+    });
+  }
+
   async cancel(): Promise<void> {
     this.cancelled = true;
     this.log('[session] cancel requested');

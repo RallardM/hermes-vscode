@@ -127,6 +127,7 @@ export interface ToWebview {
     | 'error' | 'status' | 'clear' | 'busy'
     | 'statusBar' | 'sessionList' | 'loadHistory' | 'llamaRequest' | 'sessionPicker' | 'switchSession'
     | 'new' | 'newSession' | 'compact' | 'save'
+    | 'modeChanged'
     | 'listSessions' | 'sessionsList' | 'renderSessionList';
   text?: string;
   sessionId?: string;
@@ -141,6 +142,7 @@ export interface ToWebview {
   active?: boolean;
   queued?: number;
   model?: string;
+  mode?: string;
   sessionTitle?: string;
   contextUsed?: number;
   contextSize?: number;
@@ -168,7 +170,7 @@ export interface ToWebview {
 
 export interface FromWebview {
   type:
-    | 'send' | 'switchModel' | 'cancel'
+    | 'send' | 'switchModel' | 'switchMode' | 'cancel'
     | 'newSession' | 'switchSession' | 'toggleSessionPicker' | 'renderSessionPicker'
     | 'attachFile' | 'pasteImage' | 'dropFiles' | 'clearAttachments'
     | 'toggleSkill' | 'renameSession' | 'llamaRequest'
@@ -178,6 +180,7 @@ export interface FromWebview {
   text?: string;
   sessionId?: string;
   model?: string;
+  mode?: string;
   data?: string;
   ext?: string;
   uris?: string[];

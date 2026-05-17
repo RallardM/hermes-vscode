@@ -5,6 +5,7 @@
 
 export interface WebviewState {
   currentModel: string;
+  currentMode: string;
   currentActiveSessionId: string;
   isBusy: boolean;
   knownContextSize: number;
@@ -46,6 +47,7 @@ export interface WebviewState {
 export function createInitialState(): WebviewState {
   return {
     currentModel: '',
+    currentMode: 'ask',
     currentActiveSessionId: '',
     isBusy: false,
     knownContextSize: 0,

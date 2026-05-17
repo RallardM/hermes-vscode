@@ -294,6 +294,34 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       void this.runPrompt(command);
 
+    } else if (msg.type === 'switchMode' && msg.mode) {
+      this.log(`[ui] received switchMode ${msg.mode}`);
+      this.messageQueue = [];
+      this.lastTurnText = '';
+      this.lastTurnTools = [];
+      if (this.busy) {
+        await this.session.cancel();
+      }
+      try {
+        await this.session.setMode(msg.mode, this.resolveWorkingDirectory());
+        this.log(`[ui] mode switch complete ${msg.mode}`);
+        this.post({ type: 'statusBar', mode: msg.mode });
+        this.post({ type: 'modeChanged', mode: msg.mode });
+      } catch (err) {
+        const errStr = String(err);
+        this.log(`[ui] mode switch failed ${msg.mode}: ${errStr}`);
+        // Graceful fallback for older Hermes servers that don't implement
+        // the ACP method `session/set_session_mode` (returns -32601).
+        if (errStr.includes('Method not found') || errStr.includes('-32601')) {
+          this.log('[ui] ACP adapter missing set_session_mode; applying local-only update');
+          // Update UI so users see their selection even if server can't persist it.
+          this.post({ type: 'statusBar', mode: msg.mode });
+          this.post({ type: 'modeChanged', mode: msg.mode, text: 'Note: Hermes backend does not support persistent mode; upgrade Hermes to enable server-side mode persistence.' });
+        } else {
+          this.post({ type: 'error', text: `Mode switch failed: ${errStr}` });
+        }
+      }
+
     } else if (msg.type === 'newSession') {
       this.log('[ui] new session');
       this.messageQueue = [];

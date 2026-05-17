@@ -55,6 +55,8 @@ const statusVersionEl  = document.getElementById('status-version')!;
 const ctxBarWrap       = document.getElementById('ctx-bar-wrap') as HTMLDivElement;
 const ctxBar           = document.getElementById('ctx-bar') as HTMLDivElement;
 const ctxBarFresh      = document.getElementById('ctx-bar-fresh') as HTMLDivElement;
+const modeBtn         = document.getElementById('mode-btn') as HTMLButtonElement;
+const modeMenu         = document.getElementById('mode-menu') as HTMLDivElement;
 const modelBtnHeader   = document.getElementById('model-btn-header') as HTMLButtonElement;
 const modelMenu        = document.getElementById('model-menu') as HTMLDivElement;
 const overflowBtn      = document.getElementById('overflow-btn') as HTMLButtonElement;
@@ -77,8 +79,8 @@ const historyBack   = document.getElementById('history-back') as HTMLButtonEleme
 const historySearch = document.getElementById('history-search') as HTMLInputElement;
 const historyList   = document.getElementById('history-list') as HTMLDivElement;
 
-const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, cmdArgPopover };
-const statusEls = { statusVersionEl, modelBtnHeader, modelMenu, statusSessionEl, statusContextEl, ctxBarWrap, ctxBar, ctxBarFresh };
+const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, cmdArgPopover, modeMenu };
+const statusEls = { statusVersionEl, modeBtn, modelBtnHeader, modelMenu, modeMenu, statusSessionEl, statusContextEl, ctxBarWrap, ctxBar, ctxBarFresh };
 const closeFn = () => closeAllDropdowns(dropdownEls);
 
 // ── Helpers ──────────────────────────────────────────
@@ -360,6 +362,20 @@ document.getElementById('compact-btn')?.addEventListener('click', (e) => {
     showWaiting(messagesEl);
   }
   vscode.postMessage({ type: 'send', text: '/compact' });
+});
+
+// Mode switcher
+modeBtn.addEventListener('click', (e) => {
+  e.stopPropagation(); const open = modeMenu.style.display !== 'none';
+  closeFn(); if (!open) modeMenu.style.display = 'block';
+});
+modeMenu.addEventListener('click', (e) => {
+  const opt = (e.target as HTMLElement).closest<HTMLElement>('.mode-option');
+  if (!opt?.dataset.mode) return;
+  console.debug('[webview] modeMenu click', opt.dataset.mode);
+  closeFn();
+  vscode.postMessage({ type: 'switchMode', mode: opt.dataset.mode });
+  console.debug('[webview] posted switchMode', opt.dataset.mode);
 });
 
 // Model switcher
@@ -776,7 +792,7 @@ window.addEventListener('message', (e: MessageEvent) => {
       break;
 
     case 'statusBar': {
-      updateStatusBar(S, statusEls, msg.model, msg.sessionTitle, msg.contextUsed, msg.contextSize, msg.version, msg.cachedTokens);
+      updateStatusBar(S, statusEls, msg.model, msg.mode, msg.sessionTitle, msg.contextUsed, msg.contextSize, msg.version, msg.cachedTokens);
       if (msg.skillGroups && msg.skillGroups.length > 0) S.skillGroupsData = msg.skillGroups;
       if (msg.selectedSkills !== undefined) {
         S.selectedSkillNames = new Set(msg.selectedSkills);
@@ -809,6 +825,17 @@ window.addEventListener('message', (e: MessageEvent) => {
           attachChip.style.display = 'none'; attachChip.innerHTML = '';
         }
       }
+      break;
+    }
+
+    case 'modeChanged': {
+      const modeText = msg.mode ? `${msg.mode.charAt(0).toUpperCase()}${msg.mode.slice(1)}` : 'Mode';
+      console.debug('[webview] modeChanged received', msg.mode, msg.text);
+      const note = msg.text ? ` ${msg.text}` : '';
+      const el = appendMessage(messagesEl, 'system', `Switched to ${modeText} mode.${note}`);
+      setTimeout(() => {
+        if (messagesEl.contains(el)) el.remove();
+      }, 5000);
       break;
     }
 

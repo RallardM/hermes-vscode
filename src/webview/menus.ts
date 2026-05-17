@@ -12,11 +12,12 @@ type Vscode = { postMessage(msg: FromWebview): void };
 // ── Dropdown management ──────────────────────────────
 
 export function closeAllDropdowns(els: {
-  modelMenu: HTMLElement | undefined; sessionPicker: HTMLElement | undefined;
+  modelMenu: HTMLElement | undefined; modeMenu: HTMLElement | undefined; sessionPicker: HTMLElement | undefined;
   skillsMenu: HTMLElement | undefined; overflowMenu: HTMLElement | undefined;
   cmdArgPopover?: HTMLElement | undefined;
 }): void {
   if (els.modelMenu) els.modelMenu.style.display = 'none';
+  if (els.modeMenu) els.modeMenu.style.display = 'none';
   if (els.sessionPicker) els.sessionPicker.style.display = 'none';
   if (els.skillsMenu) els.skillsMenu.style.display = 'none';
   if (els.overflowMenu) els.overflowMenu.style.display = 'none';
@@ -145,11 +146,11 @@ function renderTokenDisplay(
 export function updateStatusBar(
   state: WebviewState,
   els: {
-    statusVersionEl: HTMLElement; modelBtnHeader: HTMLElement;
-    modelMenu: HTMLElement; statusSessionEl: HTMLElement; statusContextEl: HTMLElement;
+    statusVersionEl: HTMLElement; modeBtn: HTMLElement; modelBtnHeader: HTMLElement;
+    modeMenu: HTMLElement; modelMenu: HTMLElement; statusSessionEl: HTMLElement; statusContextEl: HTMLElement;
     ctxBarWrap: HTMLElement; ctxBar: HTMLElement; ctxBarFresh: HTMLElement;
   },
-  model?: string, sessionTitle?: string,
+  model?: string, mode?: string, sessionTitle?: string,
   contextUsed?: number, contextSize?: number, version?: string,
   cachedTokens?: number,
 ): void {
@@ -173,6 +174,14 @@ export function updateStatusBar(
     state.knownContextSize = 0;
     els.statusContextEl.textContent = '';
     els.ctxBarWrap.style.display = 'none';
+  }
+  if (mode) {
+    state.currentMode = mode;
+    els.modeMenu.querySelectorAll<HTMLElement>('.mode-option').forEach(el => {
+      el.classList.toggle('active', el.dataset.mode === mode);
+    });
+    const label = mode.charAt(0).toUpperCase() + mode.slice(1);
+    els.modeBtn.textContent = `${label} ▾`;
   }
   if (sessionTitle) els.statusSessionEl.textContent = sessionTitle;
   if (contextSize && contextSize > 0) state.knownContextSize = contextSize;

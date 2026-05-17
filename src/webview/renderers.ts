@@ -40,7 +40,7 @@ export function appendDiv(container: HTMLElement, className: string): HTMLElemen
   return el;
 }
 
-export function appendMessage(container: HTMLElement, role: 'user' | 'agent' | 'tool' | 'error', text: string): HTMLElement {
+export function appendMessage(container: HTMLElement, role: 'user' | 'agent' | 'tool' | 'error' | 'system', text: string): HTMLElement {
   const el = appendDiv(container, `msg ${role}`);
   el.textContent = text;
   el.scrollIntoView({ block: 'end' });
